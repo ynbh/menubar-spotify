@@ -68,3 +68,12 @@ A quick local snapshot (using RSS from `ps`, not a full Instruments benchmark) w
 - The app stores local prototype tokens in `.config`.
 - For a real distributable app, move token storage to Keychain and use PKCE.
 
+## Screenshots
+
+**Search**
+
+![](./assets/search.png)
+
+**Playlists**
+
+![](./assets/image.png)
