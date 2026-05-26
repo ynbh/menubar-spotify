@@ -21,6 +21,7 @@ final class SpotifyStore {
     var lyricsStatus = ""
     private var pendingLyricsTrackID: String?
     private var playbackReconciliation = PlaybackReconciliation()
+    private var activeQueue: [SpotifyTrack] = []
     var webPlaybackDeviceID: String?
     var webPlaybackStatus = "Starting player..."
 
@@ -133,6 +134,13 @@ final class SpotifyStore {
     }
 
     func playTrack(_ track: SpotifyTrack) async {
+        if searchResults.contains(where: { $0.id == track.id }) {
+            activeQueue = searchResults
+        } else if recentTracks.contains(where: { $0.id == track.id }) {
+            activeQueue = recentTracks
+        } else {
+            activeQueue = [track]
+        }
         startLocalPlayback(for: track)
 
         await runBusy {
@@ -147,6 +155,7 @@ final class SpotifyStore {
             await playTrack(track)
             return
         }
+        activeQueue = playlistTracks
         startLocalPlayback(for: track)
 
         await runBusy {
@@ -159,9 +168,11 @@ final class SpotifyStore {
     func togglePlayback() async {
         await runBusy {
             if playback?.isPlaying == true {
+                playbackReconciliation.holdPlaybackState(isPlaying: false)
                 try await apiClient.pause()
                 playback?.setPlaying(false)
             } else {
+                playbackReconciliation.holdPlaybackState(isPlaying: true)
                 try await apiClient.resume(preferredDeviceID: webPlaybackDeviceID)
                 playback?.setPlaying(true)
             }
@@ -170,6 +181,15 @@ final class SpotifyStore {
     }
 
     func skipNext() async {
+        if let currentTrackID = playback?.item?.id {
+            playbackReconciliation.holdSkip(of: currentTrackID)
+            
+            if let currentIndex = activeQueue.firstIndex(where: { $0.id == currentTrackID }),
+               currentIndex + 1 < activeQueue.count {
+                let nextTrack = activeQueue[currentIndex + 1]
+                startLocalPlayback(for: nextTrack)
+            }
+        }
         await runBusy {
             try await apiClient.skipNext()
             try await refreshNowPlayingWithRetry()
@@ -177,6 +197,15 @@ final class SpotifyStore {
     }
 
     func skipPrevious() async {
+        if let currentTrackID = playback?.item?.id {
+            playbackReconciliation.holdSkip(of: currentTrackID)
+            
+            if let currentIndex = activeQueue.firstIndex(where: { $0.id == currentTrackID }),
+               currentIndex - 1 >= 0 {
+                let prevTrack = activeQueue[currentIndex - 1]
+                startLocalPlayback(for: prevTrack)
+            }
+        }
         await runBusy {
             try await apiClient.skipPrevious()
             try await refreshNowPlayingWithRetry()
@@ -309,6 +338,7 @@ final class SpotifyStore {
         lyricsStatus = ""
         pendingLyricsTrackID = nil
         playbackReconciliation.clear()
+        activeQueue = []
         cache.clear()
         webPlaybackDeviceID = nil
         webPlaybackStatus = "Starting player..."
