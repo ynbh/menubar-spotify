@@ -72,8 +72,8 @@ A quick local snapshot (using RSS from `ps`, not a full Instruments benchmark) w
 
 **Search**
 
-![](./assets/search.png)
+<img src="./assets/search.png" width="400" alt="Search tab with recent tracks">
 
 **Playlists**
 
-![](./assets/image.png)
+<img src="./assets/image.png" width="400" alt="Playlists tab">
