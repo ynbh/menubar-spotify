@@ -1,0 +1,6 @@
+.build/
+dist/
+.env
+.config
+.DS_Store
+.codex
