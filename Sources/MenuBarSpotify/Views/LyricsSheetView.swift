@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LyricsSheetView: View {
     let store: SpotifyStore
+    @State private var now = Date()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,34 +38,36 @@ struct LyricsSheetView: View {
             ScrollView {
                 ScrollViewReader { proxy in
                     VStack(alignment: .leading, spacing: 12) {
-                    if let lyrics = currentLyrics, !lyrics.syncedLines.isEmpty {
-                        ForEach(lyrics.syncedLines) { line in
-                            Text(line.text)
-                                .font(.title3.weight(line.id == activeLineID ? .semibold : .regular))
-                                .foregroundStyle(line.id == activeLineID ? Color.green : Color.primary.opacity(0.72))
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        if let lyrics = currentLyrics, !lyrics.syncedLines.isEmpty {
+                            ForEach(lyrics.syncedLines) { line in
+                                LyricLineButton(
+                                    line: line,
+                                    isActive: line.id == activeLineID
+                                ) {
+                                    seek(to: line)
+                                }
                                 .id(line.id)
+                            }
+                        } else if let plainLyrics = currentLyrics?.plainLyrics, !plainLyrics.isEmpty {
+                            Text(plainLyrics)
+                                .font(.title3)
+                                .foregroundStyle(.primary.opacity(0.9))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        } else if store.lyricsStatus == "Loading lyrics..." {
+                            LyricsSkeletonView()
+                        } else {
+                            Text(store.lyricsStatus.isEmpty ? "Lyrics unavailable for this song." : store.lyricsStatus)
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                    } else if let plainLyrics = currentLyrics?.plainLyrics, !plainLyrics.isEmpty {
-                        Text(plainLyrics)
-                            .font(.title3)
-                            .foregroundStyle(.primary.opacity(0.9))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                    } else if store.lyricsStatus == "Loading lyrics..." {
-                        LyricsSkeletonView()
-                    } else {
-                        Text(store.lyricsStatus.isEmpty ? "Lyrics unavailable for this song." : store.lyricsStatus)
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                }
-                .padding(.horizontal, 18)
-                .padding(.bottom, 20)
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 20)
                     .onChange(of: activeLineID) { _, id in
                         guard let id else { return }
-                        withAnimation(.snappy(duration: 0.25)) {
+                        withAnimation(.easeInOut(duration: 0.65)) {
                             proxy.scrollTo(id, anchor: .center)
                         }
                     }
@@ -78,6 +81,12 @@ struct LyricsSheetView: View {
         .task(id: store.playback?.item?.id) {
             await store.loadLyricsForCurrentTrack()
         }
+        .task {
+            while !Task.isCancelled {
+                now = Date()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 
     private var currentLyrics: LyricsResult? {
@@ -88,13 +97,43 @@ struct LyricsSheetView: View {
     }
 
     private var activeLineID: UUID? {
-        _ = store.now
+        _ = now
         guard let lines = currentLyrics?.syncedLines, !lines.isEmpty else {
             return nil
         }
 
         let currentTime = TimeInterval(store.playback?.estimatedProgressMs ?? 0) / 1000
         return lines.last(where: { $0.time <= currentTime })?.id ?? lines.first?.id
+    }
+
+    private func seek(to line: SyncedLyricLine) {
+        guard let durationMs = store.playback?.item?.durationMs, durationMs > 0 else {
+            return
+        }
+
+        let positionMs = line.time * 1000
+        let fraction = positionMs / Double(durationMs)
+        Task { await store.seek(to: fraction) }
+    }
+}
+
+private struct LyricLineButton: View {
+    let line: SyncedLyricLine
+    let isActive: Bool
+    let seek: () -> Void
+
+    var body: some View {
+        Button(action: seek) {
+            Text(line.text)
+                .font(.title3.weight(isActive ? .semibold : .regular))
+                .foregroundStyle(isActive ? Color.green : Color.primary.opacity(0.72))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .scaleEffect(isActive ? 1.025 : 1, anchor: .leading)
+                .animation(.easeInOut(duration: 0.35), value: isActive)
+        }
+        .buttonStyle(.plain)
+        .help("Seek to lyric")
     }
 }
 

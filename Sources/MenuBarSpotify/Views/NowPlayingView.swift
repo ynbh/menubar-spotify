@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NowPlayingView: View {
     let store: SpotifyStore
+    @State private var now = Date()
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -63,13 +64,19 @@ struct NowPlayingView: View {
             }
             .padding(.top, -2)
         }
+        .task {
+            while !Task.isCancelled {
+                now = Date()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 
     private var progress: Double {
         guard let item = store.playback?.item, let progress = store.playback?.progressMs else {
             return 0
         }
-        _ = store.now
+        _ = now
         let estimatedProgress = store.playback?.estimatedProgressMs ?? progress
         return min(max(Double(estimatedProgress) / Double(item.durationMs), 0), 1)
     }
@@ -85,7 +92,7 @@ struct NowPlayingView: View {
     }
 
     private var elapsedText: String {
-        _ = store.now
+        _ = now
         return timeText(ms: store.playback?.estimatedProgressMs ?? 0)
     }
 

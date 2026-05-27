@@ -8,6 +8,7 @@ struct SpotifyCache {
     private var lyricsEntries: [String: CacheEntry<LyricsResult>] = [:]
     private var searchEntries: [String: CacheEntry<[SpotifyTrack]>] = [:]
     private var playlistTrackEntries: [String: CacheEntry<[SpotifyTrack]>] = [:]
+    private var completePlaylistTrackIDs: Set<String> = []
 
     init(ttl: TimeInterval = 300, recentTTL: TimeInterval = 60) {
         self.ttl = ttl
@@ -27,7 +28,7 @@ struct SpotifyCache {
     }
 
     mutating func storeRecentTracks(_ tracks: [SpotifyTrack]) {
-        recentTracksEntry = CacheEntry(value: tracks)
+        recentTracksEntry = CacheEntry(value: tracks.deduplicatedByTrackID())
     }
 
     mutating func lyrics(for trackID: String) -> LyricsResult? {
@@ -47,11 +48,19 @@ struct SpotifyCache {
     }
 
     mutating func playlistTracks(for playlistID: String) -> [SpotifyTrack]? {
-        playlistTrackEntries[playlistID]?.value(ifValidFor: ttl)
+        guard completePlaylistTrackIDs.contains(playlistID) else {
+            return nil
+        }
+        return playlistTrackEntries[playlistID]?.value(ifValidFor: ttl)
     }
 
-    mutating func storePlaylistTracks(_ tracks: [SpotifyTrack], for playlistID: String) {
+    mutating func storePlaylistTracks(_ tracks: [SpotifyTrack], for playlistID: String, complete: Bool = true) {
         playlistTrackEntries[playlistID] = CacheEntry(value: tracks)
+        if complete {
+            completePlaylistTrackIDs.insert(playlistID)
+        } else {
+            completePlaylistTrackIDs.remove(playlistID)
+        }
     }
 
     mutating func clear() {
@@ -60,6 +69,7 @@ struct SpotifyCache {
         lyricsEntries.removeAll()
         searchEntries.removeAll()
         playlistTrackEntries.removeAll()
+        completePlaylistTrackIDs.removeAll()
     }
 
     private func normalized(_ query: String) -> String {

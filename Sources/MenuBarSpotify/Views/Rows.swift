@@ -3,37 +3,51 @@ import SwiftUI
 struct TrackRow: View {
     let track: SpotifyTrack
     let play: () -> Void
+    let addToQueue: () -> Void
 
     var body: some View {
-        Button(action: play) {
-            HStack(spacing: 10) {
-                ArtworkView(url: track.artworkURL, size: 38)
+        HStack(spacing: 6) {
+            Button(action: play) {
+                HStack(spacing: 10) {
+                    ArtworkView(url: track.artworkURL, size: 38)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track.name)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(1)
-                    Text(track.artistLine)
-                        .font(.caption)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(track.name)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                        Text(track.artistLine)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    Text(track.durationText)
+                        .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+
+                    Image(systemName: "play.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.green)
                 }
-
-                Spacer()
-
-                Text(track.durationText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-
-                Image(systemName: "play.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(.green)
+                .contentShape(Rectangle())
+                .padding(.leading, 8)
+                .padding(.vertical, 6)
             }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .buttonStyle(.plain)
+
+            Button(action: addToQueue) {
+                Image(systemName: "text.badge.plus")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Add to Queue")
+            .padding(.trailing, 6)
         }
-        .buttonStyle(.plain)
         .background(.quaternary.opacity(0.001), in: RoundedRectangle(cornerRadius: 8))
     }
 }

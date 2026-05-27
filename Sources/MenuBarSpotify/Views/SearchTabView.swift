@@ -41,6 +41,8 @@ struct SearchTabView: View {
                     ForEach(displayedTracks) { track in
                         TrackRow(track: track) {
                             Task { await store.playTrack(track) }
+                        } addToQueue: {
+                            Task { await store.addToQueue(track) }
                         }
                     }
                 }

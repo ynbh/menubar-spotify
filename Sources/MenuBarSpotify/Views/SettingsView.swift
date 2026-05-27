@@ -26,8 +26,8 @@ struct SettingsView: View {
                 .disabled(!store.isSignedIn)
             }
 
-            if !store.statusMessage.isEmpty {
-                Text(store.statusMessage)
+            if !store.errorMessage.isEmpty {
+                Text(store.errorMessage)
                     .foregroundStyle(.secondary)
             }
         }

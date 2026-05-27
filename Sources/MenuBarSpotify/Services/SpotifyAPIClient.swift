@@ -26,17 +26,20 @@ struct SpotifyAPIClient {
 
     func recentlyPlayedTracks() async throws -> [SpotifyTrack] {
         let response: RecentlyPlayedResponse = try await request("me/player/recently-played?limit=20")
-        return response.items.map(\.track)
+        return response.items.map(\.track).deduplicatedByTrackID()
     }
 
     func playlists() async throws -> [SpotifyPlaylist] {
-        let response: PlaylistsResponse = try await request("me/playlists?limit=30")
-        return response.items.compactMap { $0 }
+        try await paginatePlaylists(startingAt: "me/playlists?limit=50")
     }
 
-    func playlistTracks(playlistID: String) async throws -> [SpotifyTrack] {
-        let response: PlaylistTracksResponse = try await request("playlists/\(playlistID)/tracks?limit=50")
-        return response.items.map(\.track)
+    func playlistTracksPage(playlistID: String, startingAt path: String? = nil) async throws -> PlaylistTracksPage {
+        let requestPath = path ?? "playlists/\(playlistID)/tracks?limit=100"
+        let response: PlaylistTracksResponse = try await request(requestPath)
+        return PlaylistTracksPage(
+            tracks: response.items.compactMap(\.track),
+            nextPath: response.next.flatMap(Self.apiPath(from:))
+        )
     }
 
     func transferPlayback(to deviceID: String, play: Bool = false) async throws {
@@ -73,6 +76,16 @@ struct SpotifyAPIClient {
         let _: EmptyResponse = try await request("me/player/seek?position_ms=\(positionMs)", method: "PUT")
     }
 
+    func addToQueue(trackURI: String, preferredDeviceID: String? = nil) async throws {
+        guard let deviceID = try await resolvedDeviceID(preferredDeviceID: preferredDeviceID) else {
+            throw SpotifyError.noActiveDevice
+        }
+        let _: EmptyResponse = try await request(
+            "me/player/queue?uri=\(trackURI.urlQueryEncoded)&device_id=\(deviceID.urlQueryEncoded)",
+            method: "POST"
+        )
+    }
+
     func play(trackURI: String, preferredDeviceID: String? = nil) async throws {
         try await play(body: ["uris": [trackURI]], preferredDeviceID: preferredDeviceID)
     }
@@ -83,6 +96,38 @@ struct SpotifyAPIClient {
             body["offset"] = ["uri": trackURI]
         }
         try await play(body: body, preferredDeviceID: preferredDeviceID)
+    }
+
+    private func paginatePlaylists(startingAt path: String) async throws -> [SpotifyPlaylist] {
+        var playlists: [SpotifyPlaylist] = []
+        var nextPath: String? = path
+
+        while let currentPath = nextPath {
+            let response: PlaylistsResponse = try await request(currentPath)
+            playlists.append(contentsOf: response.items.compactMap { $0 })
+            nextPath = response.next.flatMap(Self.apiPath(from:))
+        }
+
+        return playlists
+    }
+
+    static func apiPath(from nextURL: String) -> String? {
+        guard let url = URL(string: nextURL) else {
+            return nil
+        }
+
+        var path = url.path
+        if path.hasPrefix("/v1/") {
+            path.removeFirst(4)
+        } else if path.hasPrefix("/") {
+            path.removeFirst()
+        }
+
+        if let query = url.query, !query.isEmpty {
+            path += "?\(query)"
+        }
+
+        return path.isEmpty ? nil : path
     }
 
     private func play(body: [String: Any], preferredDeviceID: String?) async throws {

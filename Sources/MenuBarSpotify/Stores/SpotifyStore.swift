@@ -6,24 +6,32 @@ import Observation
 final class SpotifyStore {
     var config = SpotifyConfig()
     var isSignedIn = false
-    var isBusy = false
-    var statusMessage = ""
+    private(set) var isBusy = false
+    var errorMessage = ""
     var searchQuery = ""
     var searchResults: [SpotifyTrack] = []
     var recentTracks: [SpotifyTrack] = []
     var playlists: [SpotifyPlaylist] = []
     var selectedPlaylist: SpotifyPlaylist?
     var playlistTracks: [SpotifyTrack] = []
+    var playlistTracksHasMore = false
+    var isLoadingMorePlaylistTracks = false
     var playback: SpotifyPlaybackState?
-    var now = Date()
     var isLyricsPresented = false
     var lyrics: LyricsResult?
     var lyricsStatus = ""
     private var pendingLyricsTrackID: String?
-    private var playbackReconciliation = PlaybackReconciliation()
-    private var activeQueue: [SpotifyTrack] = []
+    private var playbackProjection = PlaybackProjection()
+    private var playlistTracksNextPath: String?
+    var devices: [SpotifyDevice] = []
+    var selectedDeviceID: String?
     var webPlaybackDeviceID: String?
     var webPlaybackStatus = "Starting player..."
+
+    private var busyCount = 0
+    private var tokenRefreshTask: Task<String, Error>?
+    private var playbackCommandTail: Task<Void, Never>?
+    private var webPlaybackDisconnectHandler: (() -> Void)?
 
     private let configStore = ConfigStore.discover()
     private let authService = SpotifyAuthService()
@@ -37,17 +45,22 @@ final class SpotifyStore {
         }
     }
 
+    func registerWebPlayback(disconnect: @escaping () -> Void) {
+        webPlaybackDisconnectHandler = disconnect
+    }
+
     func bootstrap() async {
         do {
             config = try configStore.load()
             isSignedIn = config.refreshToken != nil || config.accessToken != nil
             if isSignedIn {
                 try await refreshNowPlaying()
+                await loadDevices()
                 await loadRecentTracks()
                 await loadPlaylists()
             }
         } catch {
-            statusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -56,29 +69,54 @@ final class SpotifyStore {
             config = try await authService.signIn(config: config)
             try configStore.save(config)
             isSignedIn = true
+            self.errorMessage = ""
             try await refreshNowPlaying()
+            await loadDevices()
             await loadRecentTracks()
             await loadPlaylists()
-            statusMessage = "Signed in."
         }
     }
 
     func signOut() {
+        webPlaybackDisconnectHandler?()
         config.accessToken = nil
         config.refreshToken = nil
         config.expiresAt = nil
         isSignedIn = false
+        tokenRefreshTask?.cancel()
+        tokenRefreshTask = nil
         clearLibraryState()
         do {
             try configStore.save(config)
-            statusMessage = "Signed out."
+            self.errorMessage = ""
         } catch {
-            statusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
         }
     }
 
     func refreshNowPlaying() async throws {
-        applyPlaybackState(try await apiClient.currentPlayback())
+        applyPlaybackState(try await self.apiClient.currentPlayback())
+    }
+
+    func loadDevices() async {
+        await runBusy {
+            devices = try await self.apiClient.devices()
+            if selectedDeviceID == nil {
+                selectedDeviceID = webPlaybackDeviceID ?? playback?.device?.id ?? devices.first(where: \.isActive)?.id
+            }
+        }
+    }
+
+    func selectDevice(_ device: SpotifyDevice) async {
+        guard let id = device.id else {
+            return
+        }
+
+        selectedDeviceID = id
+        await runBusy {
+            try await self.apiClient.transferPlayback(to: id, play: playback?.isPlaying == true)
+            try await refreshNowPlaying()
+        }
     }
 
     func search() async {
@@ -92,19 +130,19 @@ final class SpotifyStore {
             if let cached = cache.searchResults(for: query) {
                 searchResults = cached
             } else {
-                searchResults = try await apiClient.searchTracks(query: query)
+                searchResults = try await self.apiClient.searchTracks(query: query)
                 cache.storeSearchResults(searchResults, for: query)
             }
-            statusMessage = searchResults.isEmpty ? "No songs found." : ""
+            errorMessage = ""
         }
     }
 
     func loadRecentTracks() async {
         await runBusy {
             if let cached = cache.recentTracks() {
-                recentTracks = cached
+                recentTracks = cached.deduplicatedByTrackID()
             } else {
-                recentTracks = try await apiClient.recentlyPlayedTracks()
+                recentTracks = try await self.apiClient.recentlyPlayedTracks()
                 cache.storeRecentTracks(recentTracks)
             }
         }
@@ -115,7 +153,7 @@ final class SpotifyStore {
             if let cached = cache.playlists() {
                 playlists = cached
             } else {
-                playlists = try await apiClient.playlists()
+                playlists = try await self.apiClient.playlists()
                 cache.storePlaylists(playlists)
             }
         }
@@ -123,30 +161,65 @@ final class SpotifyStore {
 
     func openPlaylist(_ playlist: SpotifyPlaylist) async {
         selectedPlaylist = playlist
+        playlistTracksNextPath = nil
+        playlistTracksHasMore = false
+
+        if let cached = cache.playlistTracks(for: playlist.id) {
+            playlistTracks = cached
+            return
+        }
+
         await runBusy {
-            if let cached = cache.playlistTracks(for: playlist.id) {
-                playlistTracks = cached
-            } else {
-                playlistTracks = try await apiClient.playlistTracks(playlistID: playlist.id)
+            let page = try await self.apiClient.playlistTracksPage(playlistID: playlist.id)
+            playlistTracks = page.tracks
+            playlistTracksNextPath = page.nextPath
+            playlistTracksHasMore = page.nextPath != nil
+            if page.nextPath == nil {
                 cache.storePlaylistTracks(playlistTracks, for: playlist.id)
             }
         }
     }
 
-    func playTrack(_ track: SpotifyTrack) async {
-        if searchResults.contains(where: { $0.id == track.id }) {
-            activeQueue = searchResults
-        } else if recentTracks.contains(where: { $0.id == track.id }) {
-            activeQueue = recentTracks
-        } else {
-            activeQueue = [track]
-        }
-        startLocalPlayback(for: track)
+    func closePlaylist() {
+        selectedPlaylist = nil
+        playlistTracks = []
+        playlistTracksNextPath = nil
+        playlistTracksHasMore = false
+    }
 
-        await runBusy {
-            try await apiClient.play(trackURI: track.uri, preferredDeviceID: webPlaybackDeviceID)
-            statusMessage = "Playing \(track.name)"
-            Task { try? await refreshNowPlayingWithRetry() }
+    func loadMorePlaylistTracks() async {
+        guard let playlist = selectedPlaylist,
+              let nextPath = playlistTracksNextPath,
+              !isLoadingMorePlaylistTracks else {
+            return
+        }
+
+        isLoadingMorePlaylistTracks = true
+        defer { isLoadingMorePlaylistTracks = false }
+
+        do {
+            let page = try await self.apiClient.playlistTracksPage(playlistID: playlist.id, startingAt: nextPath)
+            playlistTracks.append(contentsOf: page.tracks)
+            playlistTracksNextPath = page.nextPath
+            playlistTracksHasMore = page.nextPath != nil
+            if page.nextPath == nil {
+                cache.storePlaylistTracks(playlistTracks, for: playlist.id)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func playTrack(_ track: SpotifyTrack) async {
+        startProjectedPlayback(
+            playbackProjection.startSingleTrack(track, device: playback?.device),
+            track: track
+        )
+
+        runPlaybackCommand {
+            try await self.apiClient.play(trackURI: track.uri, preferredDeviceID: self.preferredPlaybackDeviceID)
+            self.errorMessage = ""
+            Task { try? await self.refreshNowPlayingWithRetry() }
         }
     }
 
@@ -155,60 +228,51 @@ final class SpotifyStore {
             await playTrack(track)
             return
         }
-        activeQueue = playlistTracks
-        startLocalPlayback(for: track)
+        startProjectedPlayback(
+            playbackProjection.startPlaylistTrack(track, context: playlistTracks, device: playback?.device),
+            track: track
+        )
 
-        await runBusy {
-            try await apiClient.play(contextURI: playlist.uri, trackURI: track.uri, preferredDeviceID: webPlaybackDeviceID)
-            statusMessage = "Playing \(track.name)"
-            Task { try? await refreshNowPlayingWithRetry() }
+        runPlaybackCommand {
+            try await self.apiClient.play(contextURI: playlist.uri, trackURI: track.uri, preferredDeviceID: self.preferredPlaybackDeviceID)
+            self.errorMessage = ""
+            Task { try? await self.refreshNowPlayingWithRetry() }
         }
     }
 
     func togglePlayback() async {
-        await runBusy {
-            if playback?.isPlaying == true {
-                playbackReconciliation.holdPlaybackState(isPlaying: false)
-                try await apiClient.pause()
-                playback?.setPlaying(false)
+        let shouldPlay = playback?.isPlaying != true
+        playbackProjection.setPlaying(shouldPlay, playback: &playback)
+
+        runPlaybackCommand {
+            if shouldPlay {
+                try await self.apiClient.resume(preferredDeviceID: self.preferredPlaybackDeviceID)
             } else {
-                playbackReconciliation.holdPlaybackState(isPlaying: true)
-                try await apiClient.resume(preferredDeviceID: webPlaybackDeviceID)
-                playback?.setPlaying(true)
+                try await self.apiClient.pause()
             }
-            Task { try? await refreshNowPlayingWithRetry() }
+            Task { try? await self.refreshNowPlayingWithRetry() }
         }
     }
 
     func skipNext() async {
-        if let currentTrackID = playback?.item?.id {
-            playbackReconciliation.holdSkip(of: currentTrackID)
-            
-            if let currentIndex = activeQueue.firstIndex(where: { $0.id == currentTrackID }),
-               currentIndex + 1 < activeQueue.count {
-                let nextTrack = activeQueue[currentIndex + 1]
-                startLocalPlayback(for: nextTrack)
-            }
+        if let projectedPlayback = playbackProjection.skipNext(from: playback) {
+            startProjectedPlayback(projectedPlayback, track: projectedPlayback.item)
         }
-        await runBusy {
-            try await apiClient.skipNext()
-            try await refreshNowPlayingWithRetry()
+
+        runPlaybackCommand {
+            try await self.apiClient.skipNext()
+            Task { try? await self.refreshNowPlayingWithRetry() }
         }
     }
 
     func skipPrevious() async {
-        if let currentTrackID = playback?.item?.id {
-            playbackReconciliation.holdSkip(of: currentTrackID)
-            
-            if let currentIndex = activeQueue.firstIndex(where: { $0.id == currentTrackID }),
-               currentIndex - 1 >= 0 {
-                let prevTrack = activeQueue[currentIndex - 1]
-                startLocalPlayback(for: prevTrack)
-            }
+        if let projectedPlayback = playbackProjection.skipPrevious(from: playback) {
+            startProjectedPlayback(projectedPlayback, track: projectedPlayback.item)
         }
-        await runBusy {
-            try await apiClient.skipPrevious()
-            try await refreshNowPlayingWithRetry()
+
+        runPlaybackCommand {
+            try await self.apiClient.skipPrevious()
+            Task { try? await self.refreshNowPlayingWithRetry() }
         }
     }
 
@@ -218,52 +282,48 @@ final class SpotifyStore {
         }
         let clampedFraction = min(max(fraction, 0), 1)
         let positionMs = Int(Double(durationMs) * clampedFraction)
-        playbackReconciliation.holdSeek(at: positionMs)
-        playback?.seek(to: positionMs)
+        playbackProjection.seek(to: positionMs, playback: &playback)
 
-        await runBusy {
-            try await apiClient.seek(to: positionMs)
-            Task { try? await refreshNowPlayingWithRetry() }
+        runPlaybackCommand {
+            try await self.apiClient.seek(to: positionMs)
+            Task { try? await self.refreshNowPlayingWithRetry() }
+        }
+    }
+
+    func addToQueue(_ track: SpotifyTrack) async {
+        playbackProjection.addToQueue(track)
+
+        runPlaybackCommand {
+            try await self.apiClient.addToQueue(trackURI: track.uri, preferredDeviceID: self.preferredPlaybackDeviceID)
+            self.errorMessage = ""
         }
     }
 
     func accessTokenForWebPlayback() async -> String? {
-        do {
-            return try await validAccessToken()
-        } catch {
-            statusMessage = error.localizedDescription
-            return nil
-        }
+        try? await validAccessToken()
     }
 
     func webPlaybackReady(deviceID: String) async {
         webPlaybackDeviceID = deviceID
+        if selectedDeviceID == nil {
+            selectedDeviceID = deviceID
+        }
         webPlaybackStatus = "MenuBar player ready."
         do {
-            try await apiClient.transferPlayback(to: deviceID)
+            try await self.apiClient.transferPlayback(to: deviceID)
+            await loadDevices()
             try await refreshNowPlaying()
         } catch {
-            statusMessage = error.localizedDescription
+            webPlaybackStatus = error.localizedDescription
         }
     }
 
     func webPlaybackFailed(_ message: String) {
         webPlaybackStatus = message
-        statusMessage = message
     }
 
     func refreshNowPlayingQuietly() async {
-        do {
-            applyPlaybackState(try await apiClient.currentPlayback())
-        } catch {
-            if playback == nil {
-                statusMessage = error.localizedDescription
-            }
-        }
-    }
-
-    func tickClock() {
-        now = Date()
+        applyPlaybackState(try? await apiClient.currentPlayback())
     }
 
     func toggleLyrics() {
@@ -305,12 +365,27 @@ final class SpotifyStore {
         if let token = config.accessToken, let expiresAt = config.expiresAt, expiresAt > Date() {
             return token
         }
-        config = try await authService.refresh(config: config)
-        try configStore.save(config)
-        guard let token = config.accessToken else {
-            throw SpotifyError.authFailed("Spotify access token is missing.")
+
+        if let tokenRefreshTask {
+            return try await tokenRefreshTask.value
         }
-        return token
+
+        let task = Task<String, Error> { @MainActor [weak self] in
+            guard let self else {
+                throw SpotifyError.authFailed("App state is unavailable.")
+            }
+            defer { self.tokenRefreshTask = nil }
+
+            self.config = try await self.authService.refresh(config: self.config)
+            try self.configStore.save(self.config)
+            guard let token = self.config.accessToken else {
+                throw SpotifyError.authFailed("Spotify access token is missing.")
+            }
+            return token
+        }
+
+        tokenRefreshTask = task
+        return try await task.value
     }
 
     private func refreshNowPlayingWithRetry() async throws {
@@ -332,26 +407,34 @@ final class SpotifyStore {
         playlists = []
         selectedPlaylist = nil
         playlistTracks = []
+        playlistTracksNextPath = nil
+        playlistTracksHasMore = false
+        isLoadingMorePlaylistTracks = false
+        devices = []
+        selectedDeviceID = nil
         playback = nil
         isLyricsPresented = false
         lyrics = nil
         lyricsStatus = ""
         pendingLyricsTrackID = nil
-        playbackReconciliation.clear()
-        activeQueue = []
+        playbackProjection.clear()
         cache.clear()
         webPlaybackDeviceID = nil
         webPlaybackStatus = "Starting player..."
+        playbackCommandTail?.cancel()
+        playbackCommandTail = nil
+        webPlaybackDisconnectHandler = nil
     }
 
-    private func startLocalPlayback(for track: SpotifyTrack) {
-        playbackReconciliation.holdTrack(track.id)
-        playback = SpotifyPlaybackState(
-            isPlaying: true,
-            progressMs: 0,
-            item: track,
-            device: playback?.device
-        )
+    private var preferredPlaybackDeviceID: String? {
+        selectedDeviceID ?? webPlaybackDeviceID
+    }
+
+    private func startProjectedPlayback(_ projectedPlayback: SpotifyPlaybackState, track: SpotifyTrack?) {
+        playback = projectedPlayback
+        guard let track else {
+            return
+        }
         prefetchLyrics(for: track)
 
         guard isLyricsPresented else {
@@ -364,12 +447,15 @@ final class SpotifyStore {
     }
 
     private func applyPlaybackState(_ state: SpotifyPlaybackState?) {
-        guard playbackReconciliation.allows(state, replacing: playback) else {
+        guard playbackProjection.allows(state, replacing: playback) else {
             return
         }
 
         playback = state
-        playbackReconciliation.accept(state)
+        if let deviceID = state?.device?.id {
+            selectedDeviceID = deviceID
+        }
+        playbackProjection.accept(state)
     }
 
     private func prefetchLyrics(for track: SpotifyTrack) {
@@ -399,13 +485,42 @@ final class SpotifyStore {
         lyrics = result
     }
 
+    private func beginBusy() {
+        busyCount += 1
+        isBusy = busyCount > 0
+    }
+
+    private func endBusy() {
+        busyCount = max(0, busyCount - 1)
+        isBusy = busyCount > 0
+    }
+
+    private func runPlaybackCommand(_ operation: @escaping @MainActor () async throws -> Void) {
+        let previousCommand = playbackCommandTail
+        playbackCommandTail = Task { @MainActor [weak self] in
+            await previousCommand?.value
+            guard let self, !Task.isCancelled else {
+                return
+            }
+
+            self.beginBusy()
+            defer { self.endBusy() }
+
+            do {
+                try await operation()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     private func runBusy(_ operation: () async throws -> Void) async {
-        isBusy = true
-        defer { isBusy = false }
+        beginBusy()
+        defer { endBusy() }
         do {
             try await operation()
         } catch {
-            statusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
         }
     }
 }

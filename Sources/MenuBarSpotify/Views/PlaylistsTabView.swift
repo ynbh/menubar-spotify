@@ -32,8 +32,7 @@ private struct PlaylistDetailView: View {
         VStack(spacing: 8) {
             HStack {
                 Button {
-                    store.selectedPlaylist = nil
-                    store.playlistTracks = []
+                    store.closePlaylist()
                 } label: {
                     Image(systemName: "chevron.left")
                 }
@@ -52,7 +51,28 @@ private struct PlaylistDetailView: View {
                     ForEach(store.playlistTracks) { track in
                         TrackRow(track: track) {
                             Task { await store.playPlaylistTrack(track) }
+                        } addToQueue: {
+                            Task { await store.addToQueue(track) }
                         }
+                    }
+
+                    if store.playlistTracksHasMore {
+                        Button {
+                            Task { await store.loadMorePlaylistTracks() }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if store.isLoadingMorePlaylistTracks {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                                Text(store.isLoadingMorePlaylistTracks ? "Loading more..." : "Load more songs")
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .disabled(store.isLoadingMorePlaylistTracks)
                     }
                 }
                 .padding(.horizontal, 10)

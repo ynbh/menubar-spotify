@@ -5,11 +5,17 @@ import Foundation
 final class ImageMemoryCache {
     static let shared = ImageMemoryCache()
 
-    private var images: [URL: NSImage] = [:]
+    private let cache = NSCache<NSURL, NSImage>()
     private var tasks: [URL: Task<NSImage, Error>] = [:]
 
+    private init() {
+        cache.countLimit = 200
+        cache.totalCostLimit = 50 * 1024 * 1024
+    }
+
     func image(for url: URL) async throws -> NSImage {
-        if let cached = images[url] {
+        let cacheKey = url as NSURL
+        if let cached = cache.object(forKey: cacheKey) {
             return cached
         }
 
@@ -28,13 +34,17 @@ final class ImageMemoryCache {
         tasks[url] = task
         do {
             let image = try await task.value
-            images[url] = image
+            cache.setObject(image, forKey: cacheKey, cost: dataCost(for: image))
             tasks[url] = nil
             return image
         } catch {
             tasks[url] = nil
             throw error
         }
+    }
+
+    private func dataCost(for image: NSImage) -> Int {
+        image.tiffRepresentation?.count ?? 0
     }
 }
 

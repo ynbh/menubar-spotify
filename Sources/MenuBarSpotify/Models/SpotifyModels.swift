@@ -156,20 +156,48 @@ struct SyncedLyricLine: Hashable, Identifiable {
     let text: String
 }
 
+extension Array where Element == SpotifyTrack {
+    func deduplicatedByTrackID() -> [SpotifyTrack] {
+        var seenTrackIDs = Set<String>()
+        return filter { track in
+            seenTrackIDs.insert(track.id).inserted
+        }
+    }
+}
+
 struct Paging<Item: Decodable>: Decodable {
     let items: [Item]
     let total: Int
+    let next: String?
 }
 
 struct PlaylistsResponse: Decodable {
     let items: [SpotifyPlaylist?]
+    let next: String?
 }
 
 struct PlaylistTracksResponse: Decodable {
     let items: [PlaylistTrackItem]
+    let next: String?
 }
 
 struct PlaylistTrackItem: Decodable, Identifiable {
-    var id: String { track.id }
-    let track: SpotifyTrack
+    var id: String { track?.id ?? itemID }
+    private let itemID: String
+    let track: SpotifyTrack?
+
+    enum CodingKeys: String, CodingKey {
+        case track
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        track = try container.decodeIfPresent(SpotifyTrack.self, forKey: .track)
+        itemID = track?.id ?? UUID().uuidString
+    }
+}
+
+struct PlaylistTracksPage {
+    let tracks: [SpotifyTrack]
+    let nextPath: String?
 }
