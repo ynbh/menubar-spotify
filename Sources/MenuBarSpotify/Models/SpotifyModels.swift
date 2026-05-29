@@ -100,7 +100,7 @@ struct SpotifyPlaybackState: Decodable {
     var isPlaying: Bool
     var progressMs: Int?
     let item: SpotifyTrack?
-    let device: SpotifyDevice?
+    var device: SpotifyDevice?
     var receivedAt = Date()
 
     enum CodingKeys: String, CodingKey {

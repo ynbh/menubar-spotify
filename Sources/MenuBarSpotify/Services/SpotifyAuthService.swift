@@ -1,9 +1,11 @@
 import AppKit
 import AuthenticationServices
 import Foundation
+import OSLog
 
 @MainActor
 final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
+    private static let logger = Logger(subsystem: "com.yashasbhat.MenuBarSpotify", category: "auth")
     private static let tokenURL = URL(string: "https://accounts.spotify.com/api/token")!
     private static let authorizeURL = URL(string: "https://accounts.spotify.com/authorize")!
     private static let scopes = [
@@ -17,6 +19,8 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
     ]
 
     private var session: ASWebAuthenticationSession?
+    private var pendingContinuation: CheckedContinuation<URL, Error>?
+    private var pendingCallbackScheme: String?
     private let anchorWindow = NSWindow()
 
     func signIn(config: SpotifyConfig) async throws -> SpotifyConfig {
@@ -28,7 +32,11 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
         }
 
         let authURL = try authorizationURL(config: config)
-        let callbackURL = try await callback(from: authURL, scheme: URL(string: config.redirectURI)?.scheme)
+        guard let callbackScheme = URL(string: config.redirectURI)?.scheme else {
+            throw SpotifyError.authFailed("Spotify redirect URI is missing a URL scheme.")
+        }
+
+        let callbackURL = try await callback(from: authURL, scheme: callbackScheme)
         guard let code = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?
             .queryItems?
             .first(where: { $0.name == "code" })?
@@ -65,6 +73,21 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
         anchorWindow
     }
 
+    func handleCallbackURL(_ url: URL) -> Bool {
+        guard url.scheme == pendingCallbackScheme,
+              let pendingContinuation else {
+            return false
+        }
+
+        Self.logger.info("Spotify auth callback received through app URL handler.")
+        self.pendingContinuation = nil
+        self.pendingCallbackScheme = nil
+        session?.cancel()
+        session = nil
+        pendingContinuation.resume(returning: url)
+        return true
+    }
+
     private func authorizationURL(config: SpotifyConfig) throws -> URL {
         var components = URLComponents(url: Self.authorizeURL, resolvingAgainstBaseURL: false)!
         components.queryItems = [
@@ -81,17 +104,44 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
 
     private func callback(from authURL: URL, scheme: String?) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
+            Self.logger.info("Starting Spotify auth session for callback scheme: \(scheme ?? "nil", privacy: .public)")
+            pendingContinuation = continuation
+            pendingCallbackScheme = scheme
+
             let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: scheme) { callbackURL, error in
                 if let callbackURL {
-                    continuation.resume(returning: callbackURL)
+                    Self.logger.info("Spotify auth callback received through ASWebAuthenticationSession.")
+                    self.finishCallback(with: .success(callbackURL))
                 } else {
-                    continuation.resume(throwing: error ?? SpotifyError.authFailed("Sign in was cancelled."))
+                    Self.logger.error("Spotify auth callback failed: \(String(describing: error), privacy: .public)")
+                    self.finishCallback(with: .failure(error ?? SpotifyError.authFailed("Sign in was cancelled.")))
                 }
             }
             session.presentationContextProvider = self
             session.prefersEphemeralWebBrowserSession = false
             self.session = session
-            session.start()
+            guard session.start() else {
+                Self.logger.error("ASWebAuthenticationSession did not start.")
+                finishCallback(with: .failure(SpotifyError.authFailed("Could not start Spotify sign in.")))
+                return
+            }
+        }
+    }
+
+    private func finishCallback(with result: Result<URL, Error>) {
+        guard let pendingContinuation else {
+            return
+        }
+
+        self.pendingContinuation = nil
+        pendingCallbackScheme = nil
+        session = nil
+
+        switch result {
+        case .success(let url):
+            pendingContinuation.resume(returning: url)
+        case .failure(let error):
+            pendingContinuation.resume(throwing: error)
         }
     }
 

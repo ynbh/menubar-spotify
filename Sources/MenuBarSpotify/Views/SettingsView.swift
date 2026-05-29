@@ -16,8 +16,8 @@ struct SettingsView: View {
             }
 
             HStack {
-                Button("Reconnect Spotify") {
-                    Task { await store.signIn() }
+                Button("Refresh Session") {
+                    Task { await store.refreshSession() }
                 }
 
                 Button("Sign Out") {

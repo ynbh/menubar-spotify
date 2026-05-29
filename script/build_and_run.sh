@@ -14,6 +14,7 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
@@ -62,6 +63,12 @@ cat >"$INFO_PLIST" <<PLIST
 </dict>
 </plist>
 PLIST
+
+STALE_APP_BUNDLE="$ROOT_DIR/dist/$APP_NAME.app"
+if [[ -d "$STALE_APP_BUNDLE" && "$STALE_APP_BUNDLE" != "$APP_BUNDLE" ]]; then
+  "$LSREGISTER" -u "$STALE_APP_BUNDLE" >/dev/null 2>&1 || true
+fi
+"$LSREGISTER" -f "$APP_BUNDLE"
 
 open_app() {
   SPOTIFY_CONFIG_PATH="$ROOT_DIR/.config" /usr/bin/open -n "$APP_BUNDLE"

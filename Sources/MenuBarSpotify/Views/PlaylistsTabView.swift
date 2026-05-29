@@ -2,17 +2,24 @@ import SwiftUI
 
 struct PlaylistsTabView: View {
     let store: SpotifyStore
+    @State private var playlistListOffset: CGPoint = .zero
 
     var body: some View {
         VStack(spacing: 0) {
             if let playlist = store.selectedPlaylist {
                 PlaylistDetailView(store: store, playlist: playlist)
             } else {
-                ScrollView {
+                PreservingScrollView(offset: $playlistListOffset) {
                     VStack(spacing: 2) {
-                        ForEach(store.playlists) { playlist in
-                            PlaylistRow(playlist: playlist) {
-                                Task { await store.openPlaylist(playlist) }
+                        if store.isLoadingPlaylists, store.playlists.isEmpty {
+                            ForEach(0..<8, id: \.self) { _ in
+                                PlaylistRowSkeleton()
+                            }
+                        } else {
+                            ForEach(store.playlists) { playlist in
+                                PlaylistRow(playlist: playlist) {
+                                    Task { await store.openPlaylist(playlist) }
+                                }
                             }
                         }
                     }
@@ -48,11 +55,17 @@ private struct PlaylistDetailView: View {
 
             ScrollView {
                 VStack(spacing: 2) {
-                    ForEach(store.playlistTracks) { track in
-                        TrackRow(track: track) {
-                            Task { await store.playPlaylistTrack(track) }
-                        } addToQueue: {
-                            Task { await store.addToQueue(track) }
+                    if store.isLoadingPlaylistTracks, store.playlistTracks.isEmpty {
+                        ForEach(0..<8, id: \.self) { _ in
+                            TrackRowSkeleton()
+                        }
+                    } else {
+                        ForEach(store.playlistTracks) { track in
+                            TrackRow(track: track) {
+                                Task { await store.playPlaylistTrack(track) }
+                            } addToQueue: {
+                                Task { await store.addToQueue(track) }
+                            }
                         }
                     }
 

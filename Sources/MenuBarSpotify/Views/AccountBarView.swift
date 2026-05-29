@@ -15,7 +15,7 @@ struct AccountBarView: View {
             Spacer()
 
             Button {
-                Task { await store.signIn() }
+                Task { await store.refreshSession() }
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .frame(width: 16, height: 16)
@@ -23,7 +23,7 @@ struct AccountBarView: View {
             .buttonStyle(.plain)
             .font(.callout.weight(.semibold))
             .foregroundStyle(.secondary)
-            .help("Reconnect Spotify")
+            .help("Refresh Spotify Session")
 
             Button {
                 store.signOut()
@@ -71,7 +71,7 @@ private struct PlaybackDeviceButton: View {
             return .starting
         }
 
-        if store.playback?.device?.id == webPlaybackDeviceID {
+        if store.playbackDeviceID == webPlaybackDeviceID {
             return .menuBarActive
         }
         return .otherDeviceActive
@@ -82,9 +82,16 @@ private struct PlaybackDeviceButton: View {
             return store.errorMessage
         }
         if store.webPlaybackDeviceID != nil {
-            return store.playback?.device?.name ?? store.webPlaybackStatus
+            return currentDeviceName ?? store.webPlaybackStatus
         }
         return store.webPlaybackStatus
+    }
+
+    private var currentDeviceName: String? {
+        if store.playbackDeviceID == store.webPlaybackDeviceID {
+            return "MenuBar Spotify"
+        }
+        return store.devices.first { $0.id == store.playbackDeviceID }?.name ?? store.playback?.device?.name
     }
 }
 
@@ -113,7 +120,7 @@ private struct DevicePickerView: View {
                     DeviceRow(
                         title: "MenuBar Spotify",
                         subtitle: "This app",
-                        isSelected: store.selectedDeviceID == webPlaybackDevice
+                        isSelected: store.playbackDeviceID == webPlaybackDevice
                     ) {
                         Task {
                             await store.selectDevice(
@@ -129,11 +136,11 @@ private struct DevicePickerView: View {
                     }
                 }
 
-                ForEach(visibleDevices) { device in
+                ForEach(Array(visibleDevices.enumerated()), id: \.offset) { _, device in
                     DeviceRow(
                         title: device.name,
                         subtitle: device.type,
-                        isSelected: device.id == store.selectedDeviceID
+                        isSelected: device.id == store.playbackDeviceID
                     ) {
                         Task { await store.selectDevice(device) }
                     }
@@ -156,7 +163,20 @@ private struct DevicePickerView: View {
     }
 
     private var visibleDevices: [SpotifyDevice] {
-        store.devices.filter { $0.id != store.webPlaybackDeviceID }
+        var devices = store.devices
+        if let playbackDevice = store.playback?.device,
+           !devices.contains(where: { $0.matches(playbackDevice) }) {
+            devices.insert(playbackDevice, at: 0)
+        }
+
+        var seen = Set<String>()
+        return devices.filter { device in
+            if let id = device.id, id == store.webPlaybackDeviceID {
+                return false
+            }
+
+            return seen.insert(device.pickerIdentity).inserted
+        }
     }
 }
 
@@ -188,6 +208,19 @@ private struct DeviceRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+private extension SpotifyDevice {
+    var pickerIdentity: String {
+        id ?? "\(name)|\(type)"
+    }
+
+    func matches(_ other: SpotifyDevice) -> Bool {
+        if let id, let otherID = other.id {
+            return id == otherID
+        }
+        return name == other.name && type == other.type
     }
 }
 

@@ -10,6 +10,7 @@ struct RootPopoverView: View {
                 WebPlaybackHostView(store: store)
                     .frame(width: 1, height: 1)
                     .opacity(0.01)
+                    .id(store.webPlaybackReloadID)
 
                 AccountBarView(store: store)
 

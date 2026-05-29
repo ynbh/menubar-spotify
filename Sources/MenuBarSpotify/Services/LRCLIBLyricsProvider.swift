@@ -34,7 +34,7 @@ struct LRCLIBLyricsProvider {
 
     private func fetch<T: Decodable>(url: URL) async throws -> T {
         var request = URLRequest(url: url)
-        request.timeoutInterval = 6
+        request.timeoutInterval = 10
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw LyricsError.unavailable

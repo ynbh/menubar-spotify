@@ -10,7 +10,10 @@ final class ImageMemoryCache {
 
     private init() {
         cache.countLimit = 200
-        cache.totalCostLimit = 50 * 1024 * 1024
+    }
+
+    func cachedImage(for url: URL) -> NSImage? {
+        cache.object(forKey: url as NSURL)
     }
 
     func image(for url: URL) async throws -> NSImage {

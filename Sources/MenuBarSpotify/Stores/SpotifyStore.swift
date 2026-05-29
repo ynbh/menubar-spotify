@@ -12,9 +12,11 @@ final class SpotifyStore {
     var searchResults: [SpotifyTrack] = []
     var recentTracks: [SpotifyTrack] = []
     var playlists: [SpotifyPlaylist] = []
+    var isLoadingPlaylists = false
     var selectedPlaylist: SpotifyPlaylist?
     var playlistTracks: [SpotifyTrack] = []
     var playlistTracksHasMore = false
+    var isLoadingPlaylistTracks = false
     var isLoadingMorePlaylistTracks = false
     var playback: SpotifyPlaybackState?
     var isLyricsPresented = false
@@ -27,11 +29,17 @@ final class SpotifyStore {
     var selectedDeviceID: String?
     var webPlaybackDeviceID: String?
     var webPlaybackStatus = "Starting player..."
+    var webPlaybackReloadID = UUID()
+    var playbackDeviceID: String? {
+        activeDeviceTransferID() ?? playback?.device?.id ?? selectedDeviceID
+    }
 
     private var busyCount = 0
     private var tokenRefreshTask: Task<String, Error>?
     private var playbackCommandTail: Task<Void, Never>?
     private var webPlaybackDisconnectHandler: (() -> Void)?
+    private var pendingDeviceTransferID: String?
+    private var pendingDeviceTransferExpiresAt: Date?
 
     private let configStore = ConfigStore.discover()
     private let authService = SpotifyAuthService()
@@ -47,6 +55,10 @@ final class SpotifyStore {
 
     func registerWebPlayback(disconnect: @escaping () -> Void) {
         webPlaybackDisconnectHandler = disconnect
+    }
+
+    func handleOpenURL(_ url: URL) {
+        _ = authService.handleCallbackURL(url)
     }
 
     func bootstrap() async {
@@ -70,6 +82,33 @@ final class SpotifyStore {
             try configStore.save(config)
             isSignedIn = true
             self.errorMessage = ""
+            try await refreshNowPlaying()
+            await loadDevices()
+            await loadRecentTracks()
+            await loadPlaylists()
+        }
+    }
+
+    func refreshSession() async {
+        await runBusy {
+            if config.refreshToken != nil {
+                tokenRefreshTask?.cancel()
+                tokenRefreshTask = nil
+                config = try await authService.refresh(config: config)
+                try configStore.save(config)
+                isSignedIn = true
+            } else {
+                config = try await authService.signIn(config: config)
+                try configStore.save(config)
+                isSignedIn = true
+            }
+
+            webPlaybackDisconnectHandler?()
+            webPlaybackDeviceID = nil
+            webPlaybackStatus = "Starting player..."
+            webPlaybackReloadID = UUID()
+            errorMessage = ""
+
             try await refreshNowPlaying()
             await loadDevices()
             await loadRecentTracks()
@@ -112,10 +151,19 @@ final class SpotifyStore {
             return
         }
 
-        selectedDeviceID = id
+        holdDeviceTransfer(to: device)
         await runBusy {
-            try await self.apiClient.transferPlayback(to: id, play: playback?.isPlaying == true)
-            try await refreshNowPlaying()
+            do {
+                try await self.apiClient.transferPlayback(to: id, play: playback?.isPlaying == true)
+                try await refreshNowPlaying()
+                if activeDeviceTransferID() == id {
+                    clearDeviceTransferHold()
+                }
+            } catch {
+                clearDeviceTransferHold()
+                try? await refreshNowPlaying()
+                throw error
+            }
         }
     }
 
@@ -149,6 +197,9 @@ final class SpotifyStore {
     }
 
     func loadPlaylists() async {
+        isLoadingPlaylists = playlists.isEmpty
+        defer { isLoadingPlaylists = false }
+
         await runBusy {
             if let cached = cache.playlists() {
                 playlists = cached
@@ -163,9 +214,11 @@ final class SpotifyStore {
         selectedPlaylist = playlist
         playlistTracksNextPath = nil
         playlistTracksHasMore = false
+        isLoadingPlaylistTracks = true
 
         if let cached = cache.playlistTracks(for: playlist.id) {
             playlistTracks = cached
+            isLoadingPlaylistTracks = false
             return
         }
 
@@ -178,6 +231,7 @@ final class SpotifyStore {
                 cache.storePlaylistTracks(playlistTracks, for: playlist.id)
             }
         }
+        isLoadingPlaylistTracks = false
     }
 
     func closePlaylist() {
@@ -185,6 +239,7 @@ final class SpotifyStore {
         playlistTracks = []
         playlistTracksNextPath = nil
         playlistTracksHasMore = false
+        isLoadingPlaylistTracks = false
     }
 
     func loadMorePlaylistTracks() async {
@@ -405,13 +460,17 @@ final class SpotifyStore {
         searchResults = []
         recentTracks = []
         playlists = []
+        isLoadingPlaylists = false
         selectedPlaylist = nil
         playlistTracks = []
         playlistTracksNextPath = nil
         playlistTracksHasMore = false
+        isLoadingPlaylistTracks = false
         isLoadingMorePlaylistTracks = false
         devices = []
         selectedDeviceID = nil
+        pendingDeviceTransferID = nil
+        pendingDeviceTransferExpiresAt = nil
         playback = nil
         isLyricsPresented = false
         lyrics = nil
@@ -421,6 +480,7 @@ final class SpotifyStore {
         cache.clear()
         webPlaybackDeviceID = nil
         webPlaybackStatus = "Starting player..."
+        webPlaybackReloadID = UUID()
         playbackCommandTail?.cancel()
         playbackCommandTail = nil
         webPlaybackDisconnectHandler = nil
@@ -451,11 +511,52 @@ final class SpotifyStore {
             return
         }
 
+        let heldDeviceID = activeDeviceTransferID()
+        let incomingDeviceID = state?.device?.id
         playback = state
-        if let deviceID = state?.device?.id {
+
+        if let heldDeviceID, incomingDeviceID != heldDeviceID {
+            selectedDeviceID = heldDeviceID
+            playback?.device = device(for: heldDeviceID)
+        } else if let deviceID = incomingDeviceID {
             selectedDeviceID = deviceID
+            if deviceID == heldDeviceID {
+                clearDeviceTransferHold()
+            }
         }
         playbackProjection.accept(state)
+    }
+
+    private func holdDeviceTransfer(to device: SpotifyDevice) {
+        selectedDeviceID = device.id
+        pendingDeviceTransferID = device.id
+        pendingDeviceTransferExpiresAt = Date().addingTimeInterval(4)
+        playback?.device = device
+    }
+
+    private func activeDeviceTransferID() -> String? {
+        if let expiresAt = pendingDeviceTransferExpiresAt, Date() > expiresAt {
+            clearDeviceTransferHold()
+        }
+        return pendingDeviceTransferID
+    }
+
+    private func clearDeviceTransferHold() {
+        pendingDeviceTransferID = nil
+        pendingDeviceTransferExpiresAt = nil
+    }
+
+    private func device(for id: String) -> SpotifyDevice? {
+        if id == webPlaybackDeviceID {
+            return SpotifyDevice(
+                id: id,
+                name: "MenuBar Spotify",
+                type: "Computer",
+                isActive: true,
+                isRestricted: false
+            )
+        }
+        return devices.first { $0.id == id } ?? playback?.device
     }
 
     private func prefetchLyrics(for track: SpotifyTrack) {
