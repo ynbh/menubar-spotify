@@ -15,7 +15,9 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
         "user-read-currently-playing",
         "user-read-recently-played",
         "streaming",
-        "user-modify-playback-state"
+        "user-modify-playback-state",
+        "playlist-modify-private",
+        "playlist-modify-public"
     ]
 
     private var session: ASWebAuthenticationSession?
@@ -165,7 +167,13 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
     }
 
     private func sendTokenRequest<T: Decodable>(_ request: URLRequest) async throws -> T {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw SpotifyError.networkFailure(from: error) ?? error
+        }
+
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? "Unknown token error"
             throw SpotifyError.authFailed(body)

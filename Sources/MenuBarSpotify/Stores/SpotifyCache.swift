@@ -23,6 +23,14 @@ struct SpotifyCache {
         playlistsEntry = CacheEntry(value: playlists)
     }
 
+    mutating func removePlaylist(id playlistID: String) {
+        if let playlists = playlistsEntry?.value {
+            playlistsEntry = CacheEntry(value: playlists.filter { $0.id != playlistID })
+        }
+        playlistTrackEntries.removeValue(forKey: playlistID)
+        completePlaylistTrackIDs.remove(playlistID)
+    }
+
     mutating func recentTracks() -> [SpotifyTrack]? {
         recentTracksEntry?.value(ifValidFor: recentTTL)
     }

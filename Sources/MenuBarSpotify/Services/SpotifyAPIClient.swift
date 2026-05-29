@@ -42,6 +42,10 @@ struct SpotifyAPIClient {
         )
     }
 
+    func deletePlaylist(id playlistID: String) async throws {
+        let _: EmptyResponse = try await request("playlists/\(playlistID)/followers", method: "DELETE")
+    }
+
     func transferPlayback(to deviceID: String, play: Bool = false) async throws {
         let data = try JSONSerialization.data(withJSONObject: [
             "device_ids": [deviceID],
@@ -177,7 +181,7 @@ struct SpotifyAPIClient {
         let token = try await accessTokenProvider()
         var request = URLRequest(url: url(for: path))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await send(request)
         guard let http = response as? HTTPURLResponse else {
             throw SpotifyError.apiFailed("Spotify returned a non-HTTP response.")
         }
@@ -201,7 +205,7 @@ struct SpotifyAPIClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await send(request)
         guard let http = response as? HTTPURLResponse else {
             throw SpotifyError.apiFailed("Spotify returned a non-HTTP response.")
         }
@@ -226,6 +230,14 @@ struct SpotifyAPIClient {
         }
     }
 
+    private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        do {
+            return try await URLSession.shared.data(for: request)
+        } catch {
+            throw SpotifyError.networkFailure(from: error) ?? error
+        }
+    }
+
     private func url(for path: String) -> URL {
         URL(string: path, relativeTo: Self.baseURL)!
     }
@@ -241,14 +253,41 @@ enum SpotifyError: LocalizedError {
     case missingConfig(String)
     case authFailed(String)
     case apiFailed(String)
+    case networkFailed(String)
     case noActiveDevice
 
     var errorDescription: String? {
         switch self {
-        case .missingConfig(let message), .authFailed(let message), .apiFailed(let message):
+        case .missingConfig(let message), .authFailed(let message), .apiFailed(let message), .networkFailed(let message):
             return message
         case .noActiveDevice:
             return "Player is not ready."
+        }
+    }
+
+    var isNetworkFailure: Bool {
+        if case .networkFailed = self {
+            return true
+        }
+        return false
+    }
+
+    static func networkFailure(from error: Error) -> SpotifyError? {
+        guard let urlError = error as? URLError else {
+            return nil
+        }
+
+        switch urlError.code {
+        case .notConnectedToInternet:
+            return .networkFailed("No internet connection. Could not connect to Spotify.")
+        case .timedOut:
+            return .networkFailed("Spotify connection timed out.")
+        case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+            return .networkFailed("Could not reach Spotify.")
+        case .networkConnectionLost:
+            return .networkFailed("Spotify connection was lost.")
+        default:
+            return .networkFailed("Could not connect to Spotify: \(urlError.localizedDescription)")
         }
     }
 }

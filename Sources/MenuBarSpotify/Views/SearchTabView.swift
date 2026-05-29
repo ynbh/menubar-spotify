@@ -14,12 +14,19 @@ struct SearchTabView: View {
                         Task { await store.search() }
                     }
                 Button {
-                    Task { await store.search() }
+                    Task {
+                        if hasQuery {
+                            await store.clearSearch()
+                        } else {
+                            await store.search()
+                        }
+                    }
                 } label: {
-                    Image(systemName: "arrow.right.circle.fill")
+                    Image(systemName: hasQuery ? "xmark.circle.fill" : "arrow.right.circle.fill")
                 }
                 .buttonStyle(.plain)
-                .disabled(store.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .foregroundStyle(hasQuery ? .secondary : .primary)
+                .disabled(!hasQuery)
             }
             .padding(10)
             .menuBarGlass(RoundedRectangle(cornerRadius: 10), interactive: true)
@@ -58,7 +65,11 @@ struct SearchTabView: View {
     }
 
     private var showsRecentTracks: Bool {
-        store.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !hasQuery
+    }
+
+    private var hasQuery: Bool {
+        !store.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var displayedTracks: [SpotifyTrack] {

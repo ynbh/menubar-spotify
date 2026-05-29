@@ -34,6 +34,7 @@ struct PlaylistsTabView: View {
 private struct PlaylistDetailView: View {
     let store: SpotifyStore
     let playlist: SpotifyPlaylist
+    @State private var isConfirmingDelete = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -49,9 +50,53 @@ private struct PlaylistDetailView: View {
                     .font(.headline)
                     .lineLimit(1)
                 Spacer()
+
+                Button {
+                    withAnimation(.snappy(duration: 0.16)) {
+                        isConfirmingDelete.toggle()
+                    }
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Delete Playlist")
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 2)
+
+            if isConfirmingDelete {
+                HStack(spacing: 10) {
+                    Text("Remove from Spotify?")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Button("Cancel") {
+                        withAnimation(.snappy(duration: 0.16)) {
+                            isConfirmingDelete = false
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+
+                    Button {
+                        Task { await store.deleteSelectedPlaylist() }
+                    } label: {
+                        Image(systemName: "trash.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .help("Confirm Delete Playlist")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 10)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
             ScrollView {
                 VStack(spacing: 2) {

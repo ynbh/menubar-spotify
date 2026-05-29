@@ -185,6 +185,12 @@ final class SpotifyStore {
         }
     }
 
+    func clearSearch() async {
+        searchQuery = ""
+        searchResults = []
+        await loadRecentTracks()
+    }
+
     func loadRecentTracks() async {
         await runBusy {
             if let cached = cache.recentTracks() {
@@ -240,6 +246,21 @@ final class SpotifyStore {
         playlistTracksNextPath = nil
         playlistTracksHasMore = false
         isLoadingPlaylistTracks = false
+    }
+
+    func deleteSelectedPlaylist() async {
+        guard let playlist = selectedPlaylist else {
+            return
+        }
+
+        playlists.removeAll { $0.id == playlist.id }
+        closePlaylist()
+        cache.removePlaylist(id: playlist.id)
+
+        await runBusy {
+            try await self.apiClient.deletePlaylist(id: playlist.id)
+            self.errorMessage = ""
+        }
     }
 
     func loadMorePlaylistTracks() async {
@@ -355,7 +376,12 @@ final class SpotifyStore {
     }
 
     func accessTokenForWebPlayback() async -> String? {
-        try? await validAccessToken()
+        do {
+            return try await validAccessToken()
+        } catch {
+            surface(error)
+            return nil
+        }
     }
 
     func webPlaybackReady(deviceID: String) async {
@@ -378,7 +404,16 @@ final class SpotifyStore {
     }
 
     func refreshNowPlayingQuietly() async {
-        applyPlaybackState(try? await apiClient.currentPlayback())
+        do {
+            applyPlaybackState(try await apiClient.currentPlayback())
+        } catch SpotifyError.noActiveDevice {
+            handlePlaybackUnavailable()
+        } catch {
+            if let spotifyError = error as? SpotifyError, spotifyError.isNetworkFailure {
+                surface(spotifyError)
+            }
+            return
+        }
     }
 
     func toggleLyrics() {
@@ -507,6 +542,16 @@ final class SpotifyStore {
     }
 
     private func applyPlaybackState(_ state: SpotifyPlaybackState?) {
+        if state == nil {
+            guard activeDeviceTransferID() == nil,
+                  playbackProjection.allows(nil, replacing: playback) else {
+                return
+            }
+            clearPlaybackState()
+            playbackProjection.accept(nil)
+            return
+        }
+
         guard playbackProjection.allows(state, replacing: playback) else {
             return
         }
@@ -525,6 +570,28 @@ final class SpotifyStore {
             }
         }
         playbackProjection.accept(state)
+    }
+
+    private func handlePlaybackUnavailable() {
+        clearDeviceTransferHold()
+        selectedDeviceID = nil
+        clearPlaybackState()
+        restartWebPlayback()
+    }
+
+    private func clearPlaybackState() {
+        playback = nil
+        playbackProjection.clear()
+        pendingLyricsTrackID = nil
+        lyrics = nil
+        lyricsStatus = isLyricsPresented ? "No song playing." : ""
+    }
+
+    private func restartWebPlayback() {
+        webPlaybackDisconnectHandler?()
+        webPlaybackDeviceID = nil
+        webPlaybackStatus = "Starting player..."
+        webPlaybackReloadID = UUID()
     }
 
     private func holdDeviceTransfer(to device: SpotifyDevice) {
@@ -609,8 +676,11 @@ final class SpotifyStore {
 
             do {
                 try await operation()
+            } catch SpotifyError.noActiveDevice {
+                self.handlePlaybackUnavailable()
+                self.errorMessage = SpotifyError.noActiveDevice.localizedDescription
             } catch {
-                self.errorMessage = error.localizedDescription
+                self.surface(error)
             }
         }
     }
@@ -621,7 +691,14 @@ final class SpotifyStore {
         do {
             try await operation()
         } catch {
-            errorMessage = error.localizedDescription
+            surface(error)
+        }
+    }
+
+    private func surface(_ error: Error) {
+        errorMessage = error.localizedDescription
+        if let spotifyError = error as? SpotifyError, spotifyError.isNetworkFailure {
+            webPlaybackStatus = error.localizedDescription
         }
     }
 }
