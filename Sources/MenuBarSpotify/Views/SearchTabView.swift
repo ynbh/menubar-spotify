@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SearchTabView: View {
     @Bindable var store: SpotifyStore
+    @State private var scrollOffset: CGPoint = .zero
 
     var body: some View {
         VStack(spacing: 10) {
@@ -32,7 +33,7 @@ struct SearchTabView: View {
             .menuBarGlass(RoundedRectangle(cornerRadius: 10), interactive: true)
             .padding(.horizontal, 16)
 
-            ScrollView {
+            PreservingScrollView(offset: $scrollOffset) {
                 VStack(spacing: 2) {
                     if showsRecentTracks {
                         HStack {

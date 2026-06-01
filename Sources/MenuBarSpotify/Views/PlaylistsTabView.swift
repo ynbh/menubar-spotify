@@ -35,6 +35,7 @@ private struct PlaylistDetailView: View {
     let store: SpotifyStore
     let playlist: SpotifyPlaylist
     @State private var isConfirmingDelete = false
+    @State private var trackListOffset: CGPoint = .zero
 
     var body: some View {
         VStack(spacing: 8) {
@@ -98,7 +99,7 @@ private struct PlaylistDetailView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            ScrollView {
+            PreservingScrollView(offset: $trackListOffset) {
                 VStack(spacing: 2) {
                     if store.isLoadingPlaylistTracks, store.playlistTracks.isEmpty {
                         ForEach(0..<8, id: \.self) { _ in

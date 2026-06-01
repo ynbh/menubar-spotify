@@ -5,10 +5,13 @@ struct PreservingScrollView<Content: View>: NSViewRepresentable {
     @ViewBuilder var content: Content
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = VerticalOnlyNSScrollView()
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
+        scrollView.horizontalScrollElasticity = .none
+        scrollView.verticalScrollElasticity = .allowed
 
         let host = NSHostingView(rootView: content)
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -44,10 +47,11 @@ struct PreservingScrollView<Content: View>: NSViewRepresentable {
         context.coordinator.offset = $offset
 
         DispatchQueue.main.async {
-            guard scrollView.contentView.bounds.origin != offset else {
+            let verticalOffset = CGPoint(x: 0, y: offset.y)
+            guard scrollView.contentView.bounds.origin != verticalOffset else {
                 return
             }
-            scrollView.contentView.scroll(to: offset)
+            scrollView.contentView.scroll(to: verticalOffset)
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
     }
@@ -79,7 +83,31 @@ struct PreservingScrollView<Content: View>: NSViewRepresentable {
             guard let clipView = notification.object as? NSClipView else {
                 return
             }
-            offset.wrappedValue = clipView.bounds.origin
+            if clipView.bounds.origin.x != 0 {
+                clipView.scroll(to: CGPoint(x: 0, y: clipView.bounds.origin.y))
+                scrollView?.reflectScrolledClipView(clipView)
+            }
+            offset.wrappedValue = CGPoint(x: 0, y: clipView.bounds.origin.y)
         }
+    }
+}
+
+private final class VerticalOnlyNSScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        super.scrollWheel(with: event)
+        clampHorizontalOffset()
+    }
+
+    override func reflectScrolledClipView(_ clipView: NSClipView) {
+        super.reflectScrolledClipView(clipView)
+        clampHorizontalOffset()
+    }
+
+    private func clampHorizontalOffset() {
+        guard contentView.bounds.origin.x != 0 else {
+            return
+        }
+        contentView.scroll(to: CGPoint(x: 0, y: contentView.bounds.origin.y))
+        super.reflectScrolledClipView(contentView)
     }
 }
