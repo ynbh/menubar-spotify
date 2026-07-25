@@ -234,6 +234,9 @@ struct SpotifyAPIClient {
         do {
             return try await URLSession.shared.data(for: request)
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                throw CancellationError()
+            }
             throw SpotifyError.networkFailure(from: error) ?? error
         }
     }

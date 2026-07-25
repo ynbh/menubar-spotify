@@ -36,6 +36,7 @@ final class SpotifyStore {
 
     private var busyCount = 0
     private var tokenRefreshTask: Task<String, Error>?
+    private var searchTask: Task<Void, Never>?
     private var playbackCommandTail: Task<Void, Never>?
     private var webPlaybackDisconnectHandler: (() -> Void)?
     private var pendingDeviceTransferID: String?
@@ -168,24 +169,60 @@ final class SpotifyStore {
     }
 
     func search() async {
+        searchTask?.cancel()
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
             await loadRecentTracks()
             return
         }
 
-        await runBusy {
-            if let cached = cache.searchResults(for: query) {
-                searchResults = cached
-            } else {
-                searchResults = try await self.apiClient.searchTracks(query: query)
-                cache.storeSearchResults(searchResults, for: query)
+        await performSearch(query: query)
+    }
+
+    func scheduleSearch() {
+        searchTask?.cancel()
+
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            searchResults = []
+            return
+        }
+
+        searchTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(300))
+                try Task.checkCancellation()
+                await self?.performSearch(query: query)
+            } catch is CancellationError {
+                // A newer query or an explicit submit replaced this search.
+            } catch {
+                self?.surface(error)
             }
+        }
+    }
+
+    private func performSearch(query: String) async {
+        await runBusy {
+            let results: [SpotifyTrack]
+            if let cached = cache.searchResults(for: query) {
+                results = cached
+            } else {
+                results = try await self.apiClient.searchTracks(query: query)
+                cache.storeSearchResults(results, for: query)
+            }
+
+            try Task.checkCancellation()
+            guard query == searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                return
+            }
+
+            searchResults = results
             errorMessage = ""
         }
     }
 
     func clearSearch() async {
+        searchTask?.cancel()
         searchQuery = ""
         searchResults = []
         await loadRecentTracks()
@@ -690,6 +727,8 @@ final class SpotifyStore {
         defer { endBusy() }
         do {
             try await operation()
+        } catch is CancellationError {
+            // Superseded async UI work should end without surfacing an error.
         } catch {
             surface(error)
         }

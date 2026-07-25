@@ -11,6 +11,9 @@ struct SearchTabView: View {
                     .foregroundStyle(.secondary)
                 TextField("Search songs", text: $store.searchQuery)
                     .textFieldStyle(.plain)
+                    .onChange(of: store.searchQuery) {
+                        store.scheduleSearch()
+                    }
                     .onSubmit {
                         Task { await store.search() }
                     }
