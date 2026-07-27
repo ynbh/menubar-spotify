@@ -1,182 +1,109 @@
 # MenuBarSpotify
 
-A tiny macOS menu-bar Spotify player. It lives in the menu bar, uses Spotify's
-Web Playback SDK as its own Spotify Connect device, and keeps the full Spotify
-desktop app out of the way.
+A small Spotify player for the macOS menu bar. It plays audio through its own
+Spotify Connect device, so the Spotify desktop app does not need to be open.
 
-## Motivation
+## Features
 
-I listen to songs, but Spotify is bloated.
+- Search tracks and reopen recently played songs
+- Browse playlists and play tracks in playlist context
+- Pause, resume, skip, seek, and switch Spotify Connect devices
+- Add tracks to the Spotify queue
+- Show synced or plain lyrics from LRCLIB
+- Run as a menu-bar-only app
 
-This is enough:
+Spotify Premium is required for playback through the Web Playback SDK.
 
-- search songs
-- browse playlists
-- play through a menu-bar player
-- seek, pause, skip, and resume
-- add tracks to the Spotify queue
-- show recent tracks in Search
-- show lyrics when I want to jam
+## Screenshots
 
-On my machine, this uses about **8x less RAM** than the full Spotify app. What more do I need?
+### Search
 
-## How It Works
+<img src="./assets/search.png" width="400" alt="Search tab with recent tracks">
 
-The app uses:
+### Playlists
 
-- Spotify Web API for search, playlists, devices, queueing, recent tracks, playback bootstrap, and external-device commands.
-- Spotify Web Playback SDK inside a persistent hidden `WKWebView` for audio and low-latency local-player controls/state.
-- LRCLIB for lyrics.
+<img src="./assets/playlists.png" width="400" alt="Playlists tab">
 
-The Web Playback SDK creates a Spotify Connect device called `MenuBar Spotify`.
-Spotify.app does not need to be open.
+### Playlist detail
+
+<img src="./assets/playlist-detail.png" width="400" alt="Playlist detail with tracks">
 
 ## Requirements
 
-- macOS with Xcode installed.
-- A Spotify Developer app.
-- Spotify Premium for playback through this app. Spotify's Web Playback SDK emits an account error when the signed-in user does not have Premium.
-- A Spotify account that has access to the playlists/tracks you want to play.
+- macOS 14 or later
+- Xcode
+- A Spotify Developer app
+- A Spotify Premium account
 
-Without Premium, authentication and some Web API reads may still work, but the
-menu-bar player cannot stream songs through the Web Playback SDK.
+## Spotify developer setup
 
-## Spotify App Setup
-
-1. Open the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
-2. Create an app.
-3. Copy the app's client ID.
-4. Add this redirect URI to the app settings:
+1. Create an app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
+2. Copy its client ID.
+3. Add this redirect URI:
 
 ```text
 spotify-menubar://callback
 ```
 
-The redirect URI must match exactly. If Spotify shows `redirect_uri: Not matching configuration`, fix it in the Developer Dashboard or in `.config`.
+The redirect URI must match exactly in Spotify and `.config`.
 
-## Local Config
+## Configuration
 
-Create `.config` in the project root:
+Create `.config` in the repository root:
 
 ```env
 SPOTIFY_CLIENT_ID=your_client_id
 SPOTIFY_REDIRECT_URI=spotify-menubar://callback
 ```
 
-After sign-in, the app writes refreshed token fields back into the same file:
+After sign-in, the app stores its access token, refresh token, and expiry in the
+same file. `.config` is ignored by Git and should stay local.
 
-```env
-SPOTIFY_ACCESS_TOKEN=...
-SPOTIFY_REFRESH_TOKEN=...
-SPOTIFY_EXPIRES_AT=...
-```
-
-Do not commit `.config`.
-
-You can override the config path with:
+To use a config file elsewhere:
 
 ```bash
 SPOTIFY_CONFIG_PATH=/path/to/spotify.config ./script/build_and_run.sh
 ```
 
-## Run
+## Build and run
+
+Build and launch a temporary app bundle:
 
 ```bash
 ./script/build_and_run.sh
 ```
 
-Run the deterministic playback regression tests with:
-
-```bash
-swift test
-```
-
-Build, launch, and verify that the app process remains alive with:
-
-```bash
-./script/build_and_run.sh --verify
-```
-
-The app runs as a menu-bar-only macOS app.
-
-To install a normal app bundle that Spotlight and Raycast can launch:
+Install `MenuBarSpotify.app` in `~/Applications`:
 
 ```bash
 ./script/build_and_run.sh install
 ```
 
-This installs `MenuBarSpotify.app` in `~/Applications`. After that, launch it
-from Spotlight or Raycast like any other macOS app; the build script is only
-needed when you want to install a newer build.
+Build, launch, and confirm that the process stays alive:
 
-## What Works
+```bash
+./script/build_and_run.sh --verify
+```
 
-- Search songs and play a selected result.
-- Browse playlists and play a playlist track in playlist context.
-- Pause, resume, skip, previous, and seek.
-- Add tracks from Search or Playlists to the Spotify queue.
-- Pick the playback device from the menu-bar popover.
-- Show recent tracks on the Search tab.
-- Show synced or plain lyrics when LRCLIB has them.
+Run the playback regression tests:
 
-## Queue And Playback Notes
+```bash
+swift test
+```
 
-- Search playback starts the selected track.
-- Playlist playback starts from the selected track inside that playlist.
-- Add to queue works from Search and Playlists.
-- Queue viewing is not implemented yet.
-- Spotify's Web API does not expose arbitrary queue remove/reorder controls.
-- Playback devices come from Spotify Connect. You may see stale-looking devices if Spotify still reports them.
+## Playback model
 
-## Scopes
+The app uses the [Spotify Web API](https://developer.spotify.com/documentation/web-api)
+for library data and remote commands. Audio and local playback state come from
+the [Spotify Web Playback SDK](https://developer.spotify.com/documentation/web-playback-sdk),
+which runs inside a persistent hidden `WKWebView`.
 
-The app currently requests:
+Authentication uses Authorization Code with PKCE. Tokens are stored only in the
+local `.config` file.
 
-- `playlist-read-private`
-- `playlist-read-collaborative`
-- `user-read-playback-state`
-- `user-read-currently-playing`
-- `user-read-recently-played`
-- `streaming`
-- `user-modify-playback-state`
+## Limitations
 
-## Security Notes
-
-This is a local hobby app. It uses Authorization Code + PKCE (no client secret)
-and stores tokens in `.config`.
-
-## Resource Usage
-
-A quick local snapshot (using RSS from `ps`, not a full Instruments benchmark) while `MenuBarSpotify` was playing and `Spotify.app` was open but idle:
-
-
-| App                | Processes | RSS Memory | CPU                             |
-| ------------------ | --------- | ---------- | ------------------------------- |
-| **MenuBarSpotify** | 1         | ~129 MB    | ~1.4% - 5.6% (song was playing) |
-| **Spotify.app**    | 7         | ~1.02 GB   | ~0.0% - 2.0%                    |
-
-
-- **Memory Ratio**: ~7.9x less RAM (about **8x**).
-- **Process Breakdown**: Spotify spawns 7 helper processes (main app, renderer, GPU, network, storage, crashpad, media/CDM). `MenuBarSpotify` runs entirely in a single process.
-- **CPU**: `MenuBarSpotify` handles actual playback, so its CPU is slightly higher during active playing compared to an idle Spotify desktop app.
-
-## References
-
-- [Spotify Web Playback SDK](https://developer.spotify.com/documentation/web-playback-sdk)
-- [Spotify Web Playback SDK reference](https://developer.spotify.com/documentation/web-playback-sdk/reference)
-- [Spotify Web API queue endpoint](https://developer.spotify.com/documentation/web-api/reference/get-queue)
-- [Spotify Web API](https://developer.spotify.com/documentation/web-api)
-
-## Screenshots
-
-**Search**
-
-<img src="./assets/search.png" width="400" alt="Search tab with recent tracks">
-
-**Playlists**
-
-<img src="./assets/playlists.png" width="400" alt="Playlists tab">
-
-**Playlist Detail**
-
-<img src="./assets/playlist-detail.png" width="400" alt="Playlist detail with tracks">
+- The queue can accept tracks, but Spotify's API does not support arbitrary
+  queue removal or reordering.
+- Spotify Connect may briefly report devices that are no longer available.
+- Lyrics depend on LRCLIB coverage.
