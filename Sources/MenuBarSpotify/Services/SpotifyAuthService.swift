@@ -1,7 +1,9 @@
 import AppKit
 import AuthenticationServices
+import CryptoKit
 import Foundation
 import OSLog
+import Security
 
 @MainActor
 final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContextProviding {
@@ -9,11 +11,14 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
     private static let tokenURL = URL(string: "https://accounts.spotify.com/api/token")!
     private static let authorizeURL = URL(string: "https://accounts.spotify.com/authorize")!
     private static let scopes = [
+        "user-read-private",
+        "user-read-email",
         "playlist-read-private",
         "playlist-read-collaborative",
         "user-read-playback-state",
         "user-read-currently-playing",
         "user-read-recently-played",
+        "user-library-read",
         "streaming",
         "user-modify-playback-state",
         "playlist-modify-private",
@@ -29,11 +34,9 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
         guard !config.clientID.isEmpty else {
             throw SpotifyError.missingConfig("Missing SPOTIFY_CLIENT_ID in .config")
         }
-        guard !config.clientSecret.isEmpty else {
-            throw SpotifyError.missingConfig("Missing SPOTIFY_CLIENT_SECRET in .config")
-        }
 
-        let authURL = try authorizationURL(config: config)
+        let codeVerifier = try Self.generateCodeVerifier()
+        let authURL = try authorizationURL(config: config, codeVerifier: codeVerifier)
         guard let callbackScheme = URL(string: config.redirectURI)?.scheme else {
             throw SpotifyError.authFailed("Spotify redirect URI is missing a URL scheme.")
         }
@@ -46,7 +49,7 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
             throw SpotifyError.authFailed("Spotify did not return an authorization code.")
         }
 
-        return try await exchangeCode(code, config: config)
+        return try await exchangeCode(code, config: config, codeVerifier: codeVerifier)
     }
 
     func refresh(config: SpotifyConfig) async throws -> SpotifyConfig {
@@ -57,10 +60,10 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
         var request = URLRequest(url: Self.tokenURL)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue(basicAuthHeader(clientID: config.clientID, clientSecret: config.clientSecret), forHTTPHeaderField: "Authorization")
         request.httpBody = formBody([
             "grant_type": "refresh_token",
-            "refresh_token": refreshToken
+            "refresh_token": refreshToken,
+            "client_id": config.clientID
         ])
 
         let response: TokenResponse = try await sendTokenRequest(request)
@@ -90,13 +93,15 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
         return true
     }
 
-    private func authorizationURL(config: SpotifyConfig) throws -> URL {
+    private func authorizationURL(config: SpotifyConfig, codeVerifier: String) throws -> URL {
         var components = URLComponents(url: Self.authorizeURL, resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "client_id", value: config.clientID),
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "redirect_uri", value: config.redirectURI),
-            URLQueryItem(name: "scope", value: Self.scopes.joined(separator: " "))
+            URLQueryItem(name: "scope", value: Self.scopes.joined(separator: " ")),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "code_challenge", value: Self.codeChallenge(for: codeVerifier))
         ]
         guard let url = components.url else {
             throw SpotifyError.authFailed("Could not create Spotify authorization URL.")
@@ -147,15 +152,16 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
         }
     }
 
-    private func exchangeCode(_ code: String, config: SpotifyConfig) async throws -> SpotifyConfig {
+    private func exchangeCode(_ code: String, config: SpotifyConfig, codeVerifier: String) async throws -> SpotifyConfig {
         var request = URLRequest(url: Self.tokenURL)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue(basicAuthHeader(clientID: config.clientID, clientSecret: config.clientSecret), forHTTPHeaderField: "Authorization")
         request.httpBody = formBody([
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": config.redirectURI
+            "redirect_uri": config.redirectURI,
+            "client_id": config.clientID,
+            "code_verifier": codeVerifier
         ])
 
         let response: TokenResponse = try await sendTokenRequest(request)
@@ -181,9 +187,17 @@ final class SpotifyAuthService: NSObject, ASWebAuthenticationPresentationContext
         return try JSONDecoder.spotify.decode(T.self, from: data)
     }
 
-    private func basicAuthHeader(clientID: String, clientSecret: String) -> String {
-        let raw = "\(clientID):\(clientSecret)"
-        return "Basic " + Data(raw.utf8).base64EncodedString()
+    private static func generateCodeVerifier() throws -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw SpotifyError.authFailed("Could not generate PKCE code verifier.")
+        }
+        return Data(bytes).base64URLEncodedString
+    }
+
+    private static func codeChallenge(for verifier: String) -> String {
+        let hash = SHA256.hash(data: Data(verifier.utf8))
+        return Data(hash).base64URLEncodedString
     }
 
     private func formBody(_ values: [String: String]) -> Data {

@@ -28,10 +28,20 @@ struct ConfigStore {
     func load() throws -> SpotifyConfig {
         var config = SpotifyConfig()
         guard FileManager.default.fileExists(atPath: url.path) else {
+            AppLog.event("config file missing", metadata: ["path": url.path])
             return config
         }
 
-        let content = try String(contentsOf: url, encoding: .utf8)
+        AppLog.event("config load started", metadata: ["path": url.path])
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        if let size = attributes[.size] as? UInt64, size > 100_000 {
+            throw SpotifyError.missingConfig("Spotify config is unexpectedly large: \(url.path)")
+        }
+
+        let data = try Data(contentsOf: url, options: [])
+        guard let content = String(data: data, encoding: .utf8) else {
+            throw SpotifyError.missingConfig("Spotify config is not valid UTF-8: \(url.path)")
+        }
         for line in content.split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
@@ -43,8 +53,6 @@ struct ConfigStore {
             switch key {
             case "SPOTIFY_CLIENT_ID":
                 config.clientID = value
-            case "SPOTIFY_CLIENT_SECRET":
-                config.clientSecret = value
             case "SPOTIFY_REDIRECT_URI":
                 config.redirectURI = value
             case "SPOTIFY_ACCESS_TOKEN":
@@ -59,13 +67,21 @@ struct ConfigStore {
                 break
             }
         }
+        AppLog.event(
+            "config load finished",
+            metadata: [
+                "path": url.path,
+                "hasClientID": !config.clientID.isEmpty,
+                "hasRefreshToken": config.refreshToken != nil,
+                "hasAccessToken": config.accessToken != nil
+            ]
+        )
         return config
     }
 
     func save(_ config: SpotifyConfig) throws {
         var lines = [
             "SPOTIFY_CLIENT_ID=\(config.clientID)",
-            "SPOTIFY_CLIENT_SECRET=\(config.clientSecret)",
             "SPOTIFY_REDIRECT_URI=\(config.redirectURI)"
         ]
 

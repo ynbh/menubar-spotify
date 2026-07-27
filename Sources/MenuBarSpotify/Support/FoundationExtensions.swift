@@ -24,3 +24,12 @@ extension CharacterSet {
         return allowed
     }()
 }
+
+extension Data {
+    var base64URLEncodedString: String {
+        base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
