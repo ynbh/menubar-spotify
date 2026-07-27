@@ -9,11 +9,14 @@ MIN_SYSTEM_VERSION="14.0"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${TMPDIR:-/tmp}/MenuBarSpotify"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
+INSTALL_DIR="$HOME/Applications"
+INSTALLED_APP_BUNDLE="$INSTALL_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+APP_ICON="$ROOT_DIR/assets/MenuBarSpotify.icns"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
@@ -27,7 +30,11 @@ cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
 
 if [[ -f "$ROOT_DIR/.config" ]]; then
-  cp "$ROOT_DIR/.config" "$APP_RESOURCES/spotify.config"
+  cp -X "$ROOT_DIR/.config" "$APP_RESOURCES/spotify.config"
+fi
+
+if [[ -f "$APP_ICON" ]]; then
+  cp -X "$APP_ICON" "$APP_RESOURCES/MenuBarSpotify.icns"
 fi
 
 cat >"$INFO_PLIST" <<PLIST
@@ -41,6 +48,10 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
+  <key>CFBundleDisplayName</key>
+  <string>MenuBar Spotify</string>
+  <key>CFBundleIconFile</key>
+  <string>MenuBarSpotify</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>LSMinimumSystemVersion</key>
@@ -70,6 +81,14 @@ if [[ -d "$STALE_APP_BUNDLE" && "$STALE_APP_BUNDLE" != "$APP_BUNDLE" ]]; then
 fi
 "$LSREGISTER" -f "$APP_BUNDLE"
 
+install_app() {
+  mkdir -p "$INSTALL_DIR"
+  rm -rf "$INSTALLED_APP_BUNDLE"
+  ditto "$APP_BUNDLE" "$INSTALLED_APP_BUNDLE"
+  "$LSREGISTER" -f "$INSTALLED_APP_BUNDLE"
+  echo "Installed $INSTALLED_APP_BUNDLE"
+}
+
 open_app() {
   SPOTIFY_CONFIG_PATH="$ROOT_DIR/.config" /usr/bin/open -n "$APP_BUNDLE"
 }
@@ -77,6 +96,10 @@ open_app() {
 case "$MODE" in
   run)
     open_app
+    ;;
+  install)
+    install_app
+    SPOTIFY_CONFIG_PATH="$ROOT_DIR/.config" /usr/bin/open -n "$INSTALLED_APP_BUNDLE"
     ;;
   --debug|debug)
     SPOTIFY_CONFIG_PATH="$ROOT_DIR/.config" lldb -- "$APP_BINARY"
@@ -95,7 +118,7 @@ case "$MODE" in
     pgrep -x "$APP_NAME" >/dev/null
     ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
+    echo "usage: $0 [run|install|--debug|--logs|--telemetry|--verify]" >&2
     exit 2
     ;;
 esac
