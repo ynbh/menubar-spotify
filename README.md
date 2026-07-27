@@ -175,4 +175,8 @@ A quick local snapshot (using RSS from `ps`, not a full Instruments benchmark) w
 
 **Playlists**
 
-<img src="./assets/image.png" width="400" alt="Playlists tab">
+<img src="./assets/playlists.png" width="400" alt="Playlists tab">
+
+**Playlist Detail**
+
+<img src="./assets/playlist-detail.png" width="400" alt="Playlist detail with tracks">
