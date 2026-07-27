@@ -4,3 +4,5 @@ dist/
 .config
 .DS_Store
 .codex
+.vscode/
+*.iconset/
