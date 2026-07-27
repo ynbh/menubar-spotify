@@ -144,6 +144,7 @@ struct ArtworkView: View {
             if let image {
                 Image(nsImage: image)
                     .resizable()
+                    .interpolation(.high)
                     .scaledToFill()
             } else {
                 placeholder
@@ -156,15 +157,24 @@ struct ArtworkView: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .compositingGroup()
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
+        }
         .task(id: url) {
             await loadImage()
         }
     }
 
+    private var cornerRadius: CGFloat {
+        size >= 80 ? 14 : 8
+    }
+
     private var placeholder: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(.quaternary)
             Image(systemName: "music.note")
                 .foregroundStyle(.secondary)

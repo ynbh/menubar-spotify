@@ -7,7 +7,9 @@ struct AccountBarView: View {
         HStack(spacing: 10) {
             PlaybackDeviceButton(store: store)
 
-            if store.isBusy {
+            AudioActivationButton(store: store)
+
+            if store.isDeviceBusy {
                 ProgressView()
                     .controlSize(.small)
             }
@@ -26,6 +28,17 @@ struct AccountBarView: View {
             .help("Refresh Spotify Session")
 
             Button {
+                AppLog.revealInFinder()
+            } label: {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .frame(width: 16, height: 16)
+            }
+            .buttonStyle(.plain)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .help("Show Debug Log")
+
+            Button {
                 store.signOut()
             } label: {
                 Image(systemName: "person.crop.circle.badge.xmark")
@@ -38,6 +51,28 @@ struct AccountBarView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)
+    }
+}
+
+private struct AudioActivationButton: View {
+    let store: SpotifyStore
+
+    var body: some View {
+        ZStack {
+            Image(systemName: store.webPlaybackNeedsActivation ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .frame(width: 16, height: 16)
+                .foregroundStyle(store.webPlaybackNeedsActivation ? Color.orange : Color.secondary)
+
+            WebPlaybackHostView(store: store)
+                .opacity(0.01)
+                .allowsHitTesting(store.webPlaybackNeedsActivation && store.webPlaybackDeviceID != nil)
+                .id(store.webPlaybackReloadID)
+        }
+        .frame(width: 16, height: 16)
+        .font(.callout.weight(.semibold))
+        .contentShape(Rectangle())
+        .help(store.webPlaybackNeedsActivation ? "Click to enable audio" : "Audio enabled")
+        .animation(.easeOut(duration: 0.15), value: store.webPlaybackNeedsActivation)
     }
 }
 
