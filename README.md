@@ -24,8 +24,8 @@ On my machine, this uses about **8x less RAM** than the full Spotify app. What m
 
 The app uses:
 
-- Spotify Web API for search, playlists, devices, queueing, recent tracks, and playback commands.
-- Spotify Web Playback SDK inside a hidden `WKWebView` for actual audio playback.
+- Spotify Web API for search, playlists, devices, queueing, recent tracks, playback bootstrap, and external-device commands.
+- Spotify Web Playback SDK inside a persistent hidden `WKWebView` for audio and low-latency local-player controls/state.
 - LRCLIB for lyrics.
 
 The Web Playback SDK creates a Spotify Connect device called `MenuBar Spotify`.
@@ -45,7 +45,7 @@ menu-bar player cannot stream songs through the Web Playback SDK.
 
 1. Open the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
 2. Create an app.
-3. Copy the app's client ID and client secret.
+3. Copy the app's client ID.
 4. Add this redirect URI to the app settings:
 
 ```text
@@ -60,7 +60,6 @@ Create `.config` in the project root:
 
 ```env
 SPOTIFY_CLIENT_ID=your_client_id
-SPOTIFY_CLIENT_SECRET=your_client_secret
 SPOTIFY_REDIRECT_URI=spotify-menubar://callback
 ```
 
@@ -86,13 +85,29 @@ SPOTIFY_CONFIG_PATH=/path/to/spotify.config ./script/build_and_run.sh
 ./script/build_and_run.sh
 ```
 
-For a build-only test:
+Run the deterministic playback regression tests with:
+
+```bash
+swift test
+```
+
+Build, launch, and verify that the app process remains alive with:
 
 ```bash
 ./script/build_and_run.sh --verify
 ```
 
 The app runs as a menu-bar-only macOS app.
+
+To install a normal app bundle that Spotlight and Raycast can launch:
+
+```bash
+./script/build_and_run.sh install
+```
+
+This installs `MenuBarSpotify.app` in `~/Applications`. After that, launch it
+from Spotlight or Raycast like any other macOS app; the build script is only
+needed when you want to install a newer build.
 
 ## What Works
 
@@ -127,8 +142,8 @@ The app currently requests:
 
 ## Security Notes
 
-This is a local hobby app. It currently uses the Authorization Code flow with a
-client secret and stores tokens in `.config`.
+This is a local hobby app. It uses Authorization Code + PKCE (no client secret)
+and stores tokens in `.config`.
 
 ## Resource Usage
 
