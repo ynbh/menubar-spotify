@@ -2,10 +2,40 @@ import SwiftUI
 
 struct NowPlayingView: View {
     let store: SpotifyStore
-    @State private var now = Date()
+    @State private var dragTrackURI: String?
+    @State private var dragWasInvalidated = false
+    @State private var isSliderEditing = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        TimelineView(
+            .animation(
+                minimumInterval: 1.0 / 30.0,
+                paused: store.playback?.isPlaying != true && store.scrubPreview == nil
+            )
+        ) { _ in
+            content(at: PlaybackClock.now)
+        }
+        .onChange(of: store.playback?.item?.uri) { _, trackURI in
+            guard let dragTrackURI, dragTrackURI != trackURI else {
+                return
+            }
+            dragWasInvalidated = true
+            store.cancelScrubPreview()
+        }
+        .onDisappear {
+            dragTrackURI = nil
+            dragWasInvalidated = false
+            isSliderEditing = false
+            store.cancelScrubPreview()
+        }
+    }
+
+    private func content(at uptime: TimeInterval) -> some View {
+        let positionMs = store.playbackProgressMs(at: uptime)
+        let durationMs = store.playback?.item?.durationMs ?? 0
+        let progress = progressFraction(positionMs: positionMs, durationMs: durationMs)
+
+        return HStack(alignment: .top, spacing: 14) {
             ArtworkView(url: store.playback?.item?.artworkURL, size: 88)
 
             VStack(alignment: .leading, spacing: 10) {
@@ -19,15 +49,23 @@ struct NowPlayingView: View {
                         .lineLimit(1)
                 }
 
-                SeekBar(value: progress) { fraction in
-                    Task { await store.seek(to: fraction) }
-                }
-                .frame(height: 12)
+                Slider(
+                    value: sliderBinding(displayedProgress: progress),
+                    in: 0...1,
+                    onEditingChanged: sliderEditingChanged
+                )
+                .tint(.green)
+                .controlSize(.small)
+                .disabled(durationMs <= 0)
+                .transaction { $0.animation = nil }
+                .accessibilityLabel("Playback position")
+                .accessibilityValue("\(timeText(ms: positionMs)) of \(timeText(ms: durationMs))")
+                .help("Seek")
 
                 HStack {
-                    Text(elapsedText)
+                    Text(timeText(ms: positionMs))
                     Spacer()
-                    Text(durationText)
+                    Text(timeText(ms: durationMs))
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -64,21 +102,6 @@ struct NowPlayingView: View {
             }
             .padding(.top, -2)
         }
-        .task {
-            while !Task.isCancelled {
-                now = Date()
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
-    }
-
-    private var progress: Double {
-        guard let item = store.playback?.item, let progress = store.playback?.progressMs else {
-            return 0
-        }
-        _ = now
-        let estimatedProgress = store.playback?.estimatedProgressMs ?? progress
-        return min(max(Double(estimatedProgress) / Double(item.durationMs), 0), 1)
     }
 
     private var subtitle: String {
@@ -91,44 +114,80 @@ struct NowPlayingView: View {
         return store.webPlaybackStatus
     }
 
-    private var elapsedText: String {
-        _ = now
-        return timeText(ms: store.playback?.estimatedProgressMs ?? 0)
+    private func sliderBinding(displayedProgress: Double) -> Binding<Double> {
+        Binding(
+            get: { displayedProgress },
+            set: { fraction in
+                updateScrubPreview(fraction)
+                if !isSliderEditing {
+                    Task { @MainActor in
+                        await Task.yield()
+                        guard !isSliderEditing,
+                              dragTrackURI != nil,
+                              store.scrubPreview != nil else {
+                            return
+                        }
+                        finishScrubbing(fraction)
+                    }
+                }
+            }
+        )
     }
 
-    private var durationText: String {
-        timeText(ms: store.playback?.item?.durationMs ?? 0)
+    private func sliderEditingChanged(_ editing: Bool) {
+        isSliderEditing = editing
+        if editing {
+            beginScrubbing()
+        } else {
+            finishScrubbing(store.scrubPreview?.fraction ?? 0)
+        }
+    }
+
+    private func beginScrubbing() {
+        guard let trackURI = store.playback?.item?.uri else {
+            return
+        }
+        dragTrackURI = trackURI
+        dragWasInvalidated = false
+    }
+
+    private func updateScrubPreview(_ fraction: Double) {
+        guard let trackURI = store.playback?.item?.uri else {
+            return
+        }
+        if dragTrackURI == nil {
+            beginScrubbing()
+        }
+        guard dragTrackURI == trackURI, !dragWasInvalidated else {
+            return
+        }
+        store.updateScrubPreview(to: fraction)
+    }
+
+    private func finishScrubbing(_ fraction: Double) {
+        updateScrubPreview(fraction)
+        let shouldCommit = !dragWasInvalidated
+            && dragTrackURI != nil
+            && dragTrackURI == store.playback?.item?.uri
+        dragTrackURI = nil
+        dragWasInvalidated = false
+
+        guard shouldCommit else {
+            store.cancelScrubPreview()
+            return
+        }
+        store.commitScrubPreview()
+    }
+
+    private func progressFraction(positionMs: Int, durationMs: Int) -> Double {
+        guard durationMs > 0 else {
+            return 0
+        }
+        return min(max(Double(positionMs) / Double(durationMs), 0), 1)
     }
 
     private func timeText(ms: Int) -> String {
-        let seconds = ms / 1000
+        let seconds = max(0, ms) / 1_000
         return "\(seconds / 60):" + String(format: "%02d", seconds % 60)
-    }
-}
-
-private struct SeekBar: View {
-    let value: Double
-    let seek: (Double) -> Void
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(.secondary.opacity(0.22))
-                    .frame(height: 8)
-
-                Capsule()
-                    .fill(.green)
-                    .frame(width: max(6, proxy.size.width * value), height: 8)
-            }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onEnded { gesture in
-                        seek(gesture.location.x / max(proxy.size.width, 1))
-                    }
-            )
-        }
-        .help("Seek")
     }
 }

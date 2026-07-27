@@ -33,6 +33,20 @@ struct SpotifyAPIClient {
         try await paginatePlaylists(startingAt: "me/playlists?limit=50")
     }
 
+    func savedTracksSummary() async throws -> PlaylistTrackSummary {
+        let response: SavedTracksResponse = try await request("me/tracks?limit=1")
+        return PlaylistTrackSummary(total: response.total)
+    }
+
+    func savedTracksPage(startingAt path: String? = nil) async throws -> PlaylistTracksPage {
+        let requestPath = path ?? "me/tracks?limit=50"
+        let response: SavedTracksResponse = try await request(requestPath)
+        return PlaylistTracksPage(
+            tracks: response.items.map(\.track),
+            nextPath: response.next.flatMap(Self.apiPath(from:))
+        )
+    }
+
     func playlistTracksPage(playlistID: String, startingAt path: String? = nil) async throws -> PlaylistTracksPage {
         let requestPath = path ?? "playlists/\(playlistID)/tracks?limit=100"
         let response: PlaylistTracksResponse = try await request(requestPath)
@@ -64,20 +78,29 @@ struct SpotifyAPIClient {
         )
     }
 
-    func pause() async throws {
-        let _: EmptyResponse = try await request("me/player/pause", method: "PUT")
+    func pause(preferredDeviceID: String? = nil) async throws {
+        let deviceQuery = try await deviceQuery(preferredDeviceID: preferredDeviceID)
+        let _: EmptyResponse = try await request("me/player/pause\(deviceQuery)", method: "PUT")
     }
 
-    func skipNext() async throws {
-        let _: EmptyResponse = try await request("me/player/next", method: "POST")
+    func skipNext(preferredDeviceID: String? = nil) async throws {
+        let deviceQuery = try await deviceQuery(preferredDeviceID: preferredDeviceID)
+        let _: EmptyResponse = try await request("me/player/next\(deviceQuery)", method: "POST")
     }
 
-    func skipPrevious() async throws {
-        let _: EmptyResponse = try await request("me/player/previous", method: "POST")
+    func skipPrevious(preferredDeviceID: String? = nil) async throws {
+        let deviceQuery = try await deviceQuery(preferredDeviceID: preferredDeviceID)
+        let _: EmptyResponse = try await request("me/player/previous\(deviceQuery)", method: "POST")
     }
 
-    func seek(to positionMs: Int) async throws {
-        let _: EmptyResponse = try await request("me/player/seek?position_ms=\(positionMs)", method: "PUT")
+    func seek(to positionMs: Int, preferredDeviceID: String? = nil) async throws {
+        guard let deviceID = try await resolvedDeviceID(preferredDeviceID: preferredDeviceID) else {
+            throw SpotifyError.noActiveDevice
+        }
+        let _: EmptyResponse = try await request(
+            "me/player/seek?position_ms=\(positionMs)&device_id=\(deviceID.urlQueryEncoded)",
+            method: "PUT"
+        )
     }
 
     func addToQueue(trackURI: String, preferredDeviceID: String? = nil) async throws {
@@ -154,6 +177,13 @@ struct SpotifyAPIClient {
         return try await playbackTargetDevice()?.id
     }
 
+    private func deviceQuery(preferredDeviceID: String?) async throws -> String {
+        guard let deviceID = try await resolvedDeviceID(preferredDeviceID: preferredDeviceID) else {
+            throw SpotifyError.noActiveDevice
+        }
+        return "?device_id=\(deviceID.urlQueryEncoded)"
+    }
+
     private func playbackTargetDevice() async throws -> SpotifyDevice? {
         if let device = try await currentPlayback()?.device, !device.isRestricted {
             return device
@@ -181,6 +211,7 @@ struct SpotifyAPIClient {
         let token = try await accessTokenProvider()
         var request = URLRequest(url: url(for: path))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 15
         let (data, response) = try await send(request)
         guard let http = response as? HTTPURLResponse else {
             throw SpotifyError.apiFailed("Spotify returned a non-HTTP response.")
@@ -199,6 +230,7 @@ struct SpotifyAPIClient {
         let token = try await accessTokenProvider()
         var request = URLRequest(url: url(for: path))
         request.httpMethod = method
+        request.timeoutInterval = 15
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let body {
             request.httpBody = body
@@ -231,9 +263,42 @@ struct SpotifyAPIClient {
     }
 
     private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        let startedAt = Date()
+        let method = request.httpMethod ?? "GET"
+        let path = request.url.map { url in
+            guard let query = url.query, !query.isEmpty else {
+                return url.path
+            }
+            return "\(url.path)?\(query)"
+        } ?? "unknown"
+        AppLog.event("spotify request started", metadata: ["method": method, "path": path])
         do {
-            return try await URLSession.shared.data(for: request)
+            let result = try await URLSession.shared.data(for: request)
+            let status = (result.1 as? HTTPURLResponse)?.statusCode
+            AppLog.event(
+                "spotify request finished",
+                metadata: [
+                    "method": method,
+                    "path": path,
+                    "status": status,
+                    "durationMs": Int(Date().timeIntervalSince(startedAt) * 1000)
+                ]
+            )
+            return result
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                AppLog.event("spotify request cancelled", metadata: ["method": method, "path": path])
+                throw CancellationError()
+            }
+            AppLog.error(
+                "spotify request failed",
+                error,
+                metadata: [
+                    "method": method,
+                    "path": path,
+                    "durationMs": Int(Date().timeIntervalSince(startedAt) * 1000)
+                ]
+            )
             throw SpotifyError.networkFailure(from: error) ?? error
         }
     }

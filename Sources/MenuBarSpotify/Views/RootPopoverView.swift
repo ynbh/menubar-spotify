@@ -7,11 +7,6 @@ struct RootPopoverView: View {
     var body: some View {
         VStack(spacing: 0) {
             if store.isSignedIn {
-                WebPlaybackHostView(store: store)
-                    .frame(width: 1, height: 1)
-                    .opacity(0.01)
-                    .id(store.webPlaybackReloadID)
-
                 AccountBarView(store: store)
 
                 NowPlayingView(store: store)
@@ -48,14 +43,6 @@ struct RootPopoverView: View {
         }
         .animation(.snappy(duration: 0.2), value: store.isLyricsPresented)
         .background(.clear)
-        .task {
-            while !Task.isCancelled {
-                if store.isSignedIn {
-                    await store.refreshNowPlayingQuietly()
-                }
-                try? await Task.sleep(for: .seconds(5))
-            }
-        }
     }
 }
 

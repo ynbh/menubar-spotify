@@ -5,6 +5,12 @@ import SwiftUI
 private final class AppDelegate: NSObject, NSApplicationDelegate {
     var store: SpotifyStore?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            await self?.store?.bootstrap()
+        }
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         urls.forEach { store?.handleOpenURL($0) }
     }
@@ -19,15 +25,13 @@ struct MenuBarSpotifyApp: App {
         let store = SpotifyStore()
         _store = State(initialValue: store)
         appDelegate.store = store
+        AppLog.event("app init", metadata: ["log": AppLog.pathDescription()])
     }
 
     var body: some Scene {
         MenuBarExtra {
             RootPopoverView(store: store)
                 .frame(width: 420, height: 540)
-                .task {
-                    await store.bootstrap()
-                }
         } label: {
             Image(systemName: "music.note")
                 .symbolRenderingMode(.hierarchical)

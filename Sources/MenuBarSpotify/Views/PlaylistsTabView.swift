@@ -52,16 +52,18 @@ private struct PlaylistDetailView: View {
                     .lineLimit(1)
                 Spacer()
 
-                Button {
-                    withAnimation(.snappy(duration: 0.16)) {
-                        isConfirmingDelete.toggle()
+                if !playlist.isLikedSongs {
+                    Button {
+                        withAnimation(.snappy(duration: 0.16)) {
+                            isConfirmingDelete.toggle()
+                        }
+                    } label: {
+                        Image(systemName: "trash")
                     }
-                } label: {
-                    Image(systemName: "trash")
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Delete Playlist")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Delete Playlist")
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 2)

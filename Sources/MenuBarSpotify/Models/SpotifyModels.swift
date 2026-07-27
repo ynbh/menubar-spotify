@@ -2,7 +2,6 @@ import Foundation
 
 struct SpotifyConfig {
     var clientID: String = ""
-    var clientSecret: String = ""
     var redirectURI: String = "spotify-menubar://callback"
     var accessToken: String?
     var refreshToken: String?
@@ -52,11 +51,17 @@ struct SpotifyTrack: Decodable, Identifiable, Hashable {
 }
 
 struct SpotifyPlaylist: Decodable, Identifiable, Hashable {
+    static let likedSongsID = "spotify:liked-songs"
+
     let id: String
     let name: String
     let uri: String
     let images: [SpotifyImage]
     let tracks: PlaylistTrackSummary
+
+    var isLikedSongs: Bool {
+        id == Self.likedSongsID
+    }
 
     var artworkURL: URL? {
         images.sorted { ($0.width ?? 0) > ($1.width ?? 0) }.first?.url
@@ -75,6 +80,16 @@ extension SpotifyPlaylist {
         uri = try container.decode(String.self, forKey: .uri)
         images = try container.decodeIfPresent([SpotifyImage].self, forKey: .images) ?? []
         tracks = try container.decode(PlaylistTrackSummary.self, forKey: .tracks)
+    }
+
+    static func likedSongs(total: Int) -> SpotifyPlaylist {
+        SpotifyPlaylist(
+            id: likedSongsID,
+            name: "Liked Songs",
+            uri: "spotify:collection",
+            images: [],
+            tracks: PlaylistTrackSummary(total: total)
+        )
     }
 }
 
@@ -101,30 +116,38 @@ struct SpotifyPlaybackState: Decodable {
     var progressMs: Int?
     let item: SpotifyTrack?
     var device: SpotifyDevice?
-    var receivedAt = Date()
+    var sourceTimestampMs: Int? = nil
+    var receivedAtUptime = PlaybackClock.now
 
     enum CodingKeys: String, CodingKey {
         case item, device
         case isPlaying = "is_playing"
         case progressMs = "progress_ms"
+        case sourceTimestampMs = "timestamp"
     }
 
     var estimatedProgressMs: Int {
-        guard isPlaying, let progressMs else {
-            return progressMs ?? 0
+        estimatedProgressMs(at: PlaybackClock.now)
+    }
+
+    func estimatedProgressMs(at uptime: TimeInterval) -> Int {
+        let baseProgress = max(0, progressMs ?? 0)
+        guard isPlaying, progressMs != nil else {
+            return min(baseProgress, item?.durationMs ?? baseProgress)
         }
-        let elapsed = Int(Date().timeIntervalSince(receivedAt) * 1000)
-        return min(progressMs + elapsed, item?.durationMs ?? progressMs + elapsed)
+        let elapsed = max(0, Int((uptime - receivedAtUptime) * 1_000))
+        return min(baseProgress + elapsed, item?.durationMs ?? baseProgress + elapsed)
     }
 
-    mutating func setPlaying(_ playing: Bool) {
+    mutating func setPlaying(_ playing: Bool, at uptime: TimeInterval = PlaybackClock.now) {
+        progressMs = estimatedProgressMs(at: uptime)
         isPlaying = playing
-        receivedAt = Date()
+        receivedAtUptime = uptime
     }
 
-    mutating func seek(to positionMs: Int) {
+    mutating func seek(to positionMs: Int, at uptime: TimeInterval = PlaybackClock.now) {
         progressMs = max(0, min(positionMs, item?.durationMs ?? positionMs))
-        receivedAt = Date()
+        receivedAtUptime = uptime
     }
 }
 
@@ -179,6 +202,16 @@ struct PlaylistsResponse: Decodable {
 struct PlaylistTracksResponse: Decodable {
     let items: [PlaylistTrackItem]
     let next: String?
+}
+
+struct SavedTracksResponse: Decodable {
+    let items: [SavedTrackItem]
+    let total: Int
+    let next: String?
+}
+
+struct SavedTrackItem: Decodable {
+    let track: SpotifyTrack
 }
 
 struct PlaylistTrackItem: Decodable, Identifiable {

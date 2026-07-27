@@ -2,9 +2,22 @@ import SwiftUI
 
 struct LyricsSheetView: View {
     let store: SpotifyStore
-    @State private var now = Date()
 
     var body: some View {
+        TimelineView(
+            .animation(
+                minimumInterval: 0.2,
+                paused: store.playback?.isPlaying != true && store.scrubPreview == nil
+            )
+        ) { _ in
+            content(activeLineID: activeLineID(at: PlaybackClock.now))
+        }
+        .task(id: store.playback?.item?.id) {
+            await store.loadLyricsForCurrentTrack()
+        }
+    }
+
+    private func content(activeLineID: UUID?) -> some View {
         VStack(spacing: 0) {
             Capsule()
                 .fill(.secondary.opacity(0.45))
@@ -67,7 +80,7 @@ struct LyricsSheetView: View {
                     .padding(.bottom, 20)
                     .onChange(of: activeLineID) { _, id in
                         guard let id else { return }
-                        withAnimation(.easeInOut(duration: 0.65)) {
+                        withAnimation(.easeInOut(duration: 0.35)) {
                             proxy.scrollTo(id, anchor: .center)
                         }
                     }
@@ -78,15 +91,6 @@ struct LyricsSheetView: View {
         .frame(height: 300)
         .menuBarGlass(UnevenRoundedRectangle(topLeadingRadius: 16, topTrailingRadius: 16))
         .shadow(radius: 18, y: -8)
-        .task(id: store.playback?.item?.id) {
-            await store.loadLyricsForCurrentTrack()
-        }
-        .task {
-            while !Task.isCancelled {
-                now = Date()
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
     }
 
     private var currentLyrics: LyricsResult? {
@@ -96,24 +100,23 @@ struct LyricsSheetView: View {
         return store.lyrics
     }
 
-    private var activeLineID: UUID? {
-        _ = now
+    private func activeLineID(at uptime: TimeInterval) -> UUID? {
         guard let lines = currentLyrics?.syncedLines, !lines.isEmpty else {
             return nil
         }
 
-        let currentTime = TimeInterval(store.playback?.estimatedProgressMs ?? 0) / 1000
-        return lines.last(where: { $0.time <= currentTime })?.id ?? lines.first?.id
+        let currentTime = TimeInterval(store.playbackProgressMs(at: uptime)) / 1_000
+        return lines.last(where: { $0.time <= currentTime })?.id
     }
 
     private func seek(to line: SyncedLyricLine) {
-        guard let durationMs = store.playback?.item?.durationMs, durationMs > 0 else {
+        guard let track = store.playback?.item, track.durationMs > 0 else {
             return
         }
 
-        let positionMs = line.time * 1000
-        let fraction = positionMs / Double(durationMs)
-        Task { await store.seek(to: fraction) }
+        let positionMs = line.time * 1_000
+        let fraction = positionMs / Double(track.durationMs)
+        store.seek(to: fraction, expectedTrackURI: track.uri)
     }
 }
 
@@ -130,7 +133,7 @@ private struct LyricLineButton: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .scaleEffect(isActive ? 1.025 : 1, anchor: .leading)
-                .animation(.easeInOut(duration: 0.35), value: isActive)
+                .animation(.easeInOut(duration: 0.25), value: isActive)
         }
         .buttonStyle(.plain)
         .help("Seek to lyric")
